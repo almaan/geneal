@@ -1,0 +1,29 @@
+{# src/geneal/report/templates/report.html.j2 #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>geneal report — {{ metric_name }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    table { border-collapse: collapse; } td, th { border: 1px solid #ccc; padding: 4px 8px; }
+    details { margin: 1rem 0; } summary { cursor: pointer; font-weight: bold; }
+    pre { background: #f5f5f5; padding: 1rem; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>geneal — active learning vs baseline</h1>
+  <p>Metric: <strong>{{ metric_name }}</strong>. Methods: {{ methods | join(", ") }}.</p>
+
+  <h2>Recall curve</h2>
+  {{ plot_div | safe }}
+
+  <h2>Summary table</h2>
+  {{ html_table | safe }}
+
+  <details>
+    <summary>LaTeX table (click to expand)</summary>
+    <pre>{{ latex_table }}</pre>
+  </details>
+</body>
+</html>
