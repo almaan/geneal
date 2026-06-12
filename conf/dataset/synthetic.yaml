@@ -1,0 +1,5 @@
+_target_: geneal.data.dataset.make_synthetic
+n_genes: 500
+dim: 8
+seed: 0
+noise_sd: 0.1
