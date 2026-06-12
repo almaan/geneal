@@ -83,6 +83,28 @@ class GPRSurrogate:
             std = post.stddev.numpy()
         return mean * self._y_std + self._y_mean, std * self._y_std
 
+    def predict_cov(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Joint LATENT posterior covariance (the f-posterior, without observation
+        noise) on the original target scale. The latent covariance is the right
+        object for an outcome-diversity kernel: adding the likelihood noise to the
+        diagonal but not the off-diagonals would shrink every correlation toward 0
+        and artificially weaken the anti-redundancy signal. Uses the exact
+        predictive covariance (not the LOVE/fast_pred_var Lanczos approximation),
+        which can be inconsistent between diagonal and off-diagonal and break PSD.
+        """
+        import torch
+        if self._model is None:
+            raise RuntimeError("GPRSurrogate.predict_cov called before fit")
+        X = np.asarray(X, dtype=np.float64)
+        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32)
+        self._model.eval()
+        self._likelihood.eval()
+        with torch.no_grad():
+            post = self._model(tx)  # latent f-posterior, no observation noise
+            mean = post.mean.numpy()
+            cov = post.covariance_matrix.numpy()
+        return mean * self._y_std + self._y_mean, cov * (self._y_std ** 2)
+
     def clone(self) -> "GPRSurrogate":
         return GPRSurrogate(nu=self.nu, n_iters=self.n_iters, lr=self.lr)
 
@@ -124,6 +146,7 @@ class BNNSurrogate:
         sigma = pyro.sample("sigma", dist.HalfNormal(torch.tensor(1.0)))
         h = torch.tanh(x @ w1 + b1)
         out = (h @ w2 + b2).squeeze(-1)
+        pyro.deterministic("latent", out)  # noise-free function value, for predict_cov
         with pyro.plate("data", x.shape[0]):
             pyro.sample("obs", dist.Normal(out, sigma), obs=y)
         return out
@@ -166,6 +189,29 @@ class BNNSurrogate:
         mean = obs.mean(0) * self._y_std + self._y_mean
         std = obs.std(0) * self._y_std
         return mean, std
+
+    def predict_cov(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Joint LATENT posterior covariance (sample covariance of the noise-free
+        function values), not the observation `obs` site. The latent covariance is
+        the right object for an outcome-diversity kernel — including observation
+        noise would inflate the diagonal relative to the off-diagonals and shrink
+        every correlation toward 0.
+        """
+        import torch
+        import pyro
+        from pyro.infer import Predictive
+        if self._guide is None:
+            raise RuntimeError("BNNSurrogate.predict_cov called before fit")
+        X = np.asarray(X, dtype=np.float64)
+        xt = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32)
+        pred = Predictive(self._model, guide=self._guide,
+                          num_samples=self.n_predict, return_sites=["latent"])
+        with torch.no_grad():
+            lat = pred(xt)["latent"].detach().numpy()  # (n_predict, n), standardized
+        lat = lat.reshape(self.n_predict, -1)
+        mean = lat.mean(0) * self._y_std + self._y_mean
+        cov = np.cov(lat, rowvar=False) * (self._y_std ** 2)
+        return mean, np.atleast_2d(cov)
 
     def clone(self) -> "BNNSurrogate":
         return BNNSurrogate(hidden=self.hidden, n_steps=self.n_steps, lr=self.lr,

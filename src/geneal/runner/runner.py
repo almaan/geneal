@@ -5,6 +5,7 @@ import hashlib
 import numpy as np
 import pandas as pd
 from geneal.experiment.objects import Experiment, Method
+from geneal.metrics.diagnostics import batch_quality, batch_diversity
 
 
 class Runner:
@@ -54,7 +55,7 @@ class Runner:
         revealed = list(init_idx)
         revealed_y = (ds.target[revealed] + noise_vec[revealed]).tolist()
 
-        out = [self._record(method, seed, 0, revealed, metric, ds.target)]
+        out = [self._record(method, seed, 0, revealed, metric, ds.target, ds)]
 
         for r in range(1, design.n_rounds + 1):
             X_train = ds.embeddings[revealed]
@@ -75,11 +76,13 @@ class Runner:
             for idx in sel:
                 revealed.append(idx)
                 revealed_y.append(float(ds.target[idx] + noise_vec[idx]))
-            out.append(self._record(method, seed, r, revealed, metric, ds.target))
+            out.append(self._record(method, seed, r, revealed, metric,
+                                    ds.target, ds, batch=sel))
         return out
 
     @staticmethod
-    def _record(method, seed, rnd, revealed, metric, target) -> dict:
+    def _record(method, seed, rnd, revealed, metric, target, ds,
+                batch=None) -> dict:
         return {
             "method": method.name,
             "seed": seed,
@@ -87,4 +90,8 @@ class Runner:
             "n_revealed": len(revealed),
             "metric": metric.evaluate(revealed, target),
             "metric_name": metric.name,
+            "batch_quality": (batch_quality(batch, target)
+                              if batch is not None else float("nan")),
+            "batch_diversity": (batch_diversity(batch, ds.embeddings)
+                                if batch is not None else float("nan")),
         }
