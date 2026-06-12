@@ -31,8 +31,13 @@ contributions:
 1. **Zero-shot foundation-model embedding benchmark.** How far does an AL loop get
    using FROZEN gene/protein FM embeddings (scPRINT, ESM2) as the prior, with no
    perturbation-trained embeddings? This directly contrasts NAIAD's
-   adaptive-embedding claim. Requires treating embedding source as a first-class
-   experimental axis (scPRINT vs ESM2 vs PCA/random baseline).
+   adaptive-embedding claim. Embedding source is a first-class experimental axis
+   (scPRINT vs ESM2). The AL *baseline* — the control the AL loop must beat — is
+   **random selection** (no surrogate), not an alternative embedding. A random
+   embedding is kept only as a harness sanity/ablation: with signal-free
+   embeddings, AL should not beat random selection. (No PCA baseline — PCA needs a
+   feature matrix to decompose; the embeddings are already the only per-gene
+   features we have.)
 
 2. **Batch acquisition under realistic wet-lab batch sizes.** NAIAD acquires
    greedily. A real knockout round buys ~10 assays at once, not 1 — so the
