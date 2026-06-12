@@ -17,8 +17,14 @@ def test_gpr_predict_cov_shapes_and_psd():
     assert mean.shape == (n,)
     assert cov.shape == (n, n)
     assert np.allclose(cov, cov.T, atol=1e-4)
-    _, std = surr.predict(Xte)
-    assert np.allclose(np.diag(cov), std**2, rtol=0.2, atol=1e-3)
+    pmean, std = surr.predict(Xte)
+    # predict_cov returns the LATENT covariance (no observation noise); its
+    # diagonal must be positive and not exceed the marginal predictive variance
+    # std**2 (= latent var + noise var) beyond numerical tolerance.
+    assert np.all(np.diag(cov) > 0)
+    assert np.all(np.diag(cov) <= std**2 + 1e-3)
+    # latent mean equals the predictive mean (observation noise is zero-mean)
+    assert np.allclose(mean, pmean, atol=1e-3)
     eig = np.linalg.eigvalsh((cov + cov.T) / 2)
     assert eig.min() > -1e-4
 
