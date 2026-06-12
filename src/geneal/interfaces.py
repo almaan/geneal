@@ -26,11 +26,15 @@ class Selection(Protocol):
     Receives everything any strategy might need; impls use the subset they care
     about. `candidate_idx` are absolute dataset indices; the return value is a
     list of absolute dataset indices (a subset of candidate_idx), length q.
+    `X_train`/`y_train` are the surrogate's current fitted training inputs and
+    targets — strategies that refit (e.g. fantasy batching) need them so the
+    refit conditions on real data plus fantasies, not fantasies alone.
     """
     def select(self, *, candidate_idx: Sequence[int], X_candidates: np.ndarray,
                mean: np.ndarray, std: np.ndarray, best: float, q: int,
                rng: np.random.Generator, surrogate: Surrogate,
-               acquisition: Acquisition) -> list[int]: ...
+               acquisition: Acquisition, X_train: np.ndarray,
+               y_train: np.ndarray) -> list[int]: ...
 
 
 @runtime_checkable

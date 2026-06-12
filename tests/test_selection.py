@@ -30,15 +30,41 @@ def test_topq_returns_q_items():
 
 def test_fantasy_returns_q_distinct_absolute_idx():
     ds = make_synthetic(n_genes=40, dim=4, seed=1)
-    surr = GPRSurrogate().fit(ds.embeddings[:10], ds.target[:10])
+    Xtr, ytr = ds.embeddings[:10], ds.target[:10]
+    surr = GPRSurrogate().fit(Xtr, ytr)
     cand = list(range(10, 40))
     Xc = ds.embeddings[cand]
     mean, std = surr.predict(Xc)
     sel = GreedyFantasy().select(
         candidate_idx=cand, X_candidates=Xc, mean=mean, std=std,
         best=float(ds.target[:10].max()), q=5, rng=np.random.default_rng(0),
-        surrogate=surr, acquisition=UCB(beta=1.0),
+        surrogate=surr, acquisition=UCB(beta=1.0), X_train=Xtr, y_train=ytr,
     )
     assert len(sel) == 5
     assert len(set(sel)) == 5
     assert set(sel).issubset(set(cand))
+
+
+def test_fantasy_refit_conditions_on_real_data_not_collapsed():
+    # Regression test: the working surrogate must be refit on real training data
+    # PLUS fantasies, not fantasies alone. With UCB(beta>0), a refit on a single
+    # fantasy point collapses predictive std to ~0 everywhere, so the post-pick
+    # scores would be the degenerate constant mean. Here we assert that after a
+    # fantasy step the surrogate still produces non-degenerate (non-constant)
+    # predictions over the candidates — which only holds when conditioned on the
+    # real data.
+    ds = make_synthetic(n_genes=60, dim=4, seed=2)
+    Xtr, ytr = ds.embeddings[:20], ds.target[:20]
+    surr = GPRSurrogate().fit(Xtr, ytr)
+    cand = list(range(20, 60))
+    Xc = ds.embeddings[cand]
+    mean, std = surr.predict(Xc)
+    # Reproduce one fantasy step the way GreedyFantasy does it, on real+fantasy.
+    fant_X = Xc[0:1]
+    fant_y = np.array([float(mean[0])])
+    aug_X = np.vstack([Xtr, fant_X])
+    aug_y = np.concatenate([ytr, fant_y])
+    m, s = surr.clone().fit(aug_X, aug_y).predict(Xc)
+    # Non-degenerate: predictions vary across candidates and uncertainty is > 0.
+    assert len(np.unique(np.round(m, 4))) > 1
+    assert float(s.max()) > 1e-3

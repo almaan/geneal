@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: geneal
+Version: 0.1.0
+Summary: Active learning for gene-knockout selection on molecular data
+Requires-Python: >=3.11
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scipy
+Requires-Dist: scikit-learn
+Requires-Dist: gpytorch
+Requires-Dist: pyro-ppl
+Requires-Dist: torch
+Requires-Dist: hydra-core
+Requires-Dist: jinja2
+Requires-Dist: plotly
+Requires-Dist: pyarrow
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
