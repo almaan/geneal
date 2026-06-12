@@ -273,7 +273,15 @@ CLAUDE.md
 - scPRINT (or ESM2 fallback) gene embeddings precomputed + cached.
 - Surrogates: GPR (Matérn) + BNN.
 - Acquisition: EI / UCB / EIG.
-- Selection: top-q greedy + greedy+fantasies.
+- Selection: top-q greedy + greedy+fantasies (v1, done).
+- **Method-phase selection strategies** (post-v1, the core contribution + its fair
+  comparison — all implemented as Selection-interface strategies on the same
+  recall@k benchmark, no external code):
+  - **k-DPP** (quality-weighted, `L_ij=q_i·S_ij·q_j`, greedy-MAP + sampling) — the method.
+  - **CoreSet / greedy-distance-maximization** — represents IterPert's selection rule (diversity-only).
+  - **TypiClust** — IterPert's best baseline (typicality-weighted clustering).
+  - (top-q greedy already represents NAIAD's quality-only greedy acquisition.)
+  - Requires surrogate `predict_cov(X) -> (mean, cov)` for S_ij.
 - NoiseModel: fixed Gaussian.
 - Metric: recall@k (pluggable).
 - Runner: AL vs greedy/random baseline over N seeds, structured logs, manifest.
