@@ -3,3 +3,7 @@
 res/runs/
 outputs/
 rsc/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
