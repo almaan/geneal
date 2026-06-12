@@ -20,13 +20,47 @@ The framework must generalize beyond this use case — every problem-specific pi
 is swappable. v1 is the first concrete example, not the final shape. If it works,
 it is publishable.
 
-### Scientific positioning (vs NAIAD, arxiv 2411.12010)
+### Related work (the two closest papers)
 
-The closest prior work, NAIAD, shares the AL-over-rounds frame on CRISPR data and
-argues for *adaptive gene embeddings that scale with training data*, using a
-**greedy max-predicted-effect** acquisition. To have a defensible edge rather than
-re-implementing NAIAD's easier single-gene sub-problem, geneal has two primary
-contributions — one **method**, one **benchmark axis**:
+**NAIAD** (arxiv 2411.12010). AL-over-rounds on CRISPR combinatorial data; argues
+for *adaptive gene embeddings that scale with data*; acquires with **greedy
+max-predicted-effect** (single best, no diversity). Does gene *pairs*.
+
+**IterPert** (Huang, Lopez, Hütter, Kudo, Rios, Regev — bioRxiv 2023.12.12.571389,
+Genentech/Stanford). "Active learning on a budget" for Perturb-seq design.
+Verified from the paper:
+- **Objective:** global **model accuracy** over perturbation space — predict unseen
+  expression outcomes well. Coverage for model fit, *not* finding best perturbations.
+- **Contribution:** a **prior-fused kernel** — one kernel per prior modality (GO
+  ontology, protein networks, FM embeddings, literature…) fused with the model
+  kernel to better characterize perturbation relations.
+- **Selection rule:** off-the-shelf and **pure diversity** — "greedy distance
+  maximization" (farthest-point / coreset). They explicitly state the method is
+  *agnostic to the selection rule* and do not innovate there. **No quality/value
+  term** — selection is representativeness + diversity only.
+- Baselines: TypiClust (their best), CoreSet, BADGE, ACS-FW, LCMD, BatchBALD.
+
+**Where geneal sits.** IterPert and geneal are nearly **orthogonal**: IterPert
+innovates the *kernel* and keeps selection vanilla and quality-free, for a
+*coverage* objective; geneal innovates the *selection rule* (a quality-weighted
+DPP) for an *extreme-recovery* objective (recall@k of the most lethal knockouts).
+Coverage-driven diversity (IterPert) spreads picks across the whole space — good
+for model fit, wasteful for finding the tail. NAIAD has quality but no diversity;
+IterPert has diversity but no quality. **geneal's k-DPP is the first to couple
+both** (`q_i·S_ij·q_j`) for batch *Bayesian optimization* of extremes, with
+diversity measured in the surrogate's *posterior outcome* space (data-adaptive),
+not a static prior-fused kernel.
+
+**Honest boundaries.** (1) Multi-modal prior fusion is IterPert's — we do NOT claim
+it; our FM-embedding-as-representation is a subset of their priors. (2) Their
+prior-fused kernel is **composable** with our S_ij, not competing — a future axis,
+not a rival. (3) TypiClust and CoreSet (diversity-only) become **required
+baselines**: the k-DPP must beat them on top-k recovery, which is exactly where
+quality-free diversity should fail.
+
+### Primary contribution & supporting axis
+
+The defensible edge is one **method**, one supporting **benchmark axis**:
 
 #### Primary method: quality-weighted k-DPP batch acquisition
 
@@ -58,8 +92,17 @@ collinear → determinant collapses → the DPP will not take both.
 batch's **information gain**. So max-`det` IS an information-theoretic batch
 acquisition, with outcome-covariance-driven diversity built in — not q independent
 high-scorers (NAIAD greedy), not an input-space diversity heuristic (greedy +
-fantasies). Greedy top-q, greedy+fantasies, and random selection are all baselines
-the DPP must beat.
+fantasies). Required baselines the DPP must beat, spanning the two failure modes:
+**quality-only** (greedy top-q = NAIAD-style, greedy+fantasies) and
+**diversity-only** (TypiClust, CoreSet/greedy-distance-max = IterPert-style), plus
+random selection. The thesis is that on a top-k recovery objective, quality-only
+batches are redundant and diversity-only batches waste assays off the tail — only
+the quality×diversity coupling wins.
+
+**Composability note:** S_ij defaults to the surrogate's posterior correlation, but
+the interface should accept an externally-supplied similarity kernel — e.g. an
+IterPert-style prior-fused kernel — so prior fusion is a future axis layered on the
+k-DPP, not a competing method.
 
 **Solver:** subset max-`det` is NP-hard exactly. Ship **greedy MAP** (add the gene
 with largest marginal det-gain, q times — fast, near-optimal, deterministic) as the
