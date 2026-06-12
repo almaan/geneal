@@ -1,6 +1,7 @@
 # src/geneal/runner/runner.py
 from __future__ import annotations
 from typing import Sequence
+import hashlib
 import numpy as np
 import pandas as pd
 from geneal.experiment.objects import Experiment, Method
@@ -38,8 +39,12 @@ class Runner:
                  init_idx, seed) -> list[dict]:
         # Per-method acquisition RNG, derived deterministically from the seed and
         # method name so methods don't share an acquisition RNG stream but runs
-        # remain reproducible.
-        acq_rng = np.random.default_rng((seed, abs(hash(method.name)) % (2**32)))
+        # remain reproducible. Uses a stable (non-salted) hash of the name so runs
+        # reproduce across processes, not just within one (builtin hash() is
+        # salted per-process via PYTHONHASHSEED).
+        name_hash = int.from_bytes(
+            hashlib.sha256(method.name.encode()).digest()[:4], "big")
+        acq_rng = np.random.default_rng((seed, name_hash))
 
         revealed = list(init_idx)
         revealed_y = (ds.target[revealed] + noise_vec[revealed]).tolist()

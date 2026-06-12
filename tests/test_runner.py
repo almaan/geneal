@@ -48,6 +48,41 @@ def test_common_random_numbers_shared_initial_set():
     assert r0["metric"].nunique() == 1
 
 
+def test_runner_reproducible_across_processes():
+    # The per-method acquisition RNG must use a stable (non-salted) hash so a run
+    # reproduces in a FRESH interpreter, not just within one process. Run the same
+    # experiment in a subprocess with a randomized PYTHONHASHSEED and compare.
+    import os, subprocess, sys
+    script = (
+        "import numpy as np, pandas as pd;"
+        "from geneal.runner.runner import Runner;"
+        "from geneal.experiment.objects import ObjectiveObject, DesignObject, Method, Experiment;"
+        "from geneal.metrics.recall import RecallAtK;"
+        "from geneal.models.acquisition import UCB, RandomAcquisition;"
+        "from geneal.models.selection import TopQGreedy;"
+        "from geneal.models.surrogate import GPRSurrogate;"
+        "from geneal.models.noise import GaussianNoise;"
+        "from geneal.data.dataset import make_synthetic;"
+        "ds=make_synthetic(n_genes=40, dim=4, seed=0, noise_sd=0.05);"
+        "exp=Experiment(dataset=ds,"
+        " objective=ObjectiveObject(metric=RecallAtK(k=5), direction='maximize'),"
+        " design=DesignObject(n_rounds=2, batch_size=4, n_initial=8, seed=0),"
+        " noise=GaussianNoise(sigma=0.05),"
+        " methods=[Method('al_ucb', UCB(2.0), TopQGreedy(), GPRSurrogate()),"
+        "          Method('baseline', RandomAcquisition(), TopQGreedy(), GPRSurrogate())]);"
+        "df=Runner().run(exp, seeds=[0]);"
+        "print(df['metric'].round(6).tolist())"
+    )
+    outs = []
+    for hashseed in ("0", "12345"):
+        env = dict(os.environ, PYTHONHASHSEED=hashseed)
+        r = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                           text=True, env=env)
+        assert r.returncode == 0, r.stderr
+        outs.append(r.stdout.strip())
+    assert outs[0] == outs[1], f"non-reproducible across hash seeds: {outs}"
+
+
 def test_al_beats_or_matches_random_on_average():
     df = Runner().run(_experiment(), seeds=list(range(5)))
     final = df[df["round"] == df["round"].max()]
