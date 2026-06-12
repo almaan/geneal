@@ -1,0 +1,4 @@
+name: al_ucb
+acquisition: { _target_: geneal.models.acquisition.UCB, beta: 2.0 }
+selection:   { _target_: geneal.models.selection.TopQGreedy }
+surrogate:   { _target_: geneal.models.surrogate.GPRSurrogate }

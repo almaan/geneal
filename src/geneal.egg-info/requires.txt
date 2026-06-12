@@ -1,0 +1,14 @@
+numpy
+pandas
+scipy
+scikit-learn
+gpytorch
+pyro-ppl
+torch
+hydra-core
+jinja2
+plotly
+pyarrow
+
+[dev]
+pytest

@@ -1,0 +1,31 @@
+defaults:
+  - dataset: synthetic
+  - _self_
+
+seeds: [0, 1, 2]
+out_root: res/runs
+
+objective:
+  _target_: geneal.metrics.recall.RecallAtK
+  k: 10
+
+design:
+  _target_: geneal.experiment.objects.DesignObject
+  n_rounds: 8
+  batch_size: 10
+  n_initial: 20
+  seed: 0
+
+noise:
+  _target_: geneal.models.noise.GaussianNoise
+  sigma: 0.1
+
+methods:
+  - name: al_ucb
+    acquisition: { _target_: geneal.models.acquisition.UCB, beta: 2.0 }
+    selection:   { _target_: geneal.models.selection.TopQGreedy }
+    surrogate:   { _target_: geneal.models.surrogate.GPRSurrogate }
+  - name: baseline_random
+    acquisition: { _target_: geneal.models.acquisition.RandomAcquisition }
+    selection:   { _target_: geneal.models.selection.TopQGreedy }
+    surrogate:   { _target_: geneal.models.surrogate.GPRSurrogate }
