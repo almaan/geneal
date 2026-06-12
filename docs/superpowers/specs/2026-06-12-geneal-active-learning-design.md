@@ -20,6 +20,52 @@ The framework must generalize beyond this use case — every problem-specific pi
 is swappable. v1 is the first concrete example, not the final shape. If it works,
 it is publishable.
 
+### The moat (north star — do not lose this)
+
+**One sentence:** batch Bayesian optimization for top-k *extreme recovery*, using a
+quality-weighted DPP that diversifies only among high-predicted-value candidates in
+the surrogate's posterior-outcome space.
+
+**The 2×2 the moat lives in:**
+
+|  | No diversity | Diversity-aware |
+|---|---|---|
+| **Quality-aware** | NAIAD (greedy max-effect) | **geneal (k-DPP)** ← empty before us |
+| **Quality-free** | random | IterPert (coreset / TypiClust) |
+
+The quality×diversity cell is empty because the prior works solve *different
+problems*: IterPert optimizes **coverage / model accuracy** (pure diversity is
+correct there); NAIAD optimizes **single best effect** (diversity doesn't help).
+Only geneal's objective — recover the top-k *set* (recall@k) — needs both: gate on
+quality (don't waste a batch off the tail) AND diversify (don't burn q assays on one
+redundant cluster). **The objective forces the method.**
+
+**Three things must ALL hold (the moat is their conjunction, none alone):**
+1. Objective = extreme/top-k recovery (not coverage, not single-best).
+2. Quality-gating: q_i in `L_ij = q_i·S_ij·q_j` — diversify only among promising
+   candidates (vs IterPert's quality-free coreset).
+3. Diversity in posterior-outcome space, data-adaptive each round: S_ij = surrogate
+   posterior correlation (vs a static prior-fused kernel).
+
+**Unifying identity (why it's principled, not a heuristic stack):**
+`log det(posterior cov of a batch) = Gaussian joint entropy = batch information
+gain`. So max-`det` is simultaneously information-theoretic acquisition AND
+quality×diversity selection. NAIAD greedy and IterPert distance-max are degenerate
+corners of it.
+
+**NOT the moat (honest boundaries):** FM embeddings as prior (IterPert has them);
+multi-modal prior fusion (IterPert's); AL-on-a-budget framing (IterPert's); DPP as a
+technique (broadly known); DepMap/single-gene (not novel). The moat is none of the
+ingredients — it is applying a quality×diversity posterior-covariance DPP to extreme
+recovery.
+
+**The real risk (why Plan 1.5 tests on synthetic first):** if greedy+fantasy (a
+crude quality×diversity proxy we already have) nearly matches the principled k-DPP,
+the "principled" story weakens. Strength is EMPIRICAL — proven by Pareto-dominance
+over both quality-only (greedy) and diversity-only (TypiClust/coreset) on recall@k.
+Measure the greedy-fantasy-vs-k-DPP gap on synthetic data before committing to real
+data.
+
 ### Related work (the two closest papers)
 
 **NAIAD** (arxiv 2411.12010). AL-over-rounds on CRISPR combinatorial data; argues
