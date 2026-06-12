@@ -174,3 +174,92 @@ def _sample_kdpp(L: np.ndarray, k: int, rng) -> list[int]:
         Q, _ = np.linalg.qr(V)
         V = Q
     return sorted(set(selected))[:k] if selected else list(range(k))
+
+
+class CoreSet:
+    """Greedy farthest-point (k-center) selection in embedding space.
+
+    Diversity-only baseline representing IterPert's "greedy distance
+    maximization" selection rule. Quality (acquisition) is ignored — each pick is
+    the candidate maximally far (Euclidean, in embedding space) from the already
+    chosen set, seeded by the existing training points.
+    """
+    def select(self, *, candidate_idx, X_candidates, mean, std, best, q, rng,
+               surrogate, acquisition, X_train, y_train) -> list[int]:
+        candidate_idx = list(candidate_idx)
+        Xc = np.asarray(X_candidates, dtype=float)
+        n = len(candidate_idx)
+        q = min(q, n)
+        anchors = np.asarray(X_train, dtype=float)
+        if anchors.ndim == 1:
+            anchors = anchors.reshape(1, -1)
+        min_d = np.full(n, np.inf)
+        if len(anchors):
+            min_d = np.min(np.linalg.norm(Xc[:, None, :] - anchors[None, :, :], axis=2), axis=1)
+        chosen: list[int] = []
+        for _ in range(q):
+            j = int(np.argmax(min_d))
+            chosen.append(j)
+            min_d = np.minimum(min_d, np.linalg.norm(Xc - Xc[j], axis=1))
+            min_d[chosen] = -np.inf
+        return [candidate_idx[j] for j in chosen]
+
+
+class TypiClust:
+    """Typicality-in-clusters selection (Hacohen et al.), IterPert's best baseline.
+
+    Cluster candidates (k-means, k=q) in embedding space; from each cluster pick
+    the most "typical" point (highest local density = smallest mean distance to
+    its K nearest neighbours within the cluster). Diversity-only, quality-free.
+    """
+    def __init__(self, n_neighbors: int = 5) -> None:
+        self.n_neighbors = n_neighbors
+
+    def select(self, *, candidate_idx, X_candidates, mean, std, best, q, rng,
+               surrogate, acquisition, X_train, y_train) -> list[int]:
+        candidate_idx = list(candidate_idx)
+        Xc = np.asarray(X_candidates, dtype=float)
+        n = len(candidate_idx)
+        q = min(q, n)
+        labels = _kmeans_labels(Xc, q, rng)
+        chosen: list[int] = []
+        for c in range(q):
+            members = np.where(labels == c)[0]
+            if len(members) == 0:
+                continue
+            chosen.append(int(members[_most_typical(Xc[members], self.n_neighbors)]))
+        if len(chosen) < q:
+            remaining = [i for i in range(n) if i not in chosen]
+            chosen.extend(remaining[: q - len(chosen)])
+        return [candidate_idx[j] for j in chosen[:q]]
+
+
+def _kmeans_labels(X: np.ndarray, k: int, rng, n_iter: int = 25) -> np.ndarray:
+    """Minimal seeded k-means (Lloyd). Returns cluster label per row."""
+    n = X.shape[0]
+    k = min(k, n)
+    centers = X[rng.choice(n, size=k, replace=False)].copy()
+    labels = np.zeros(n, dtype=int)
+    for _ in range(n_iter):
+        d = np.linalg.norm(X[:, None, :] - centers[None, :, :], axis=2)
+        new = d.argmin(axis=1)
+        if np.array_equal(new, labels):
+            break
+        labels = new
+        for c in range(k):
+            pts = X[labels == c]
+            if len(pts):
+                centers[c] = pts.mean(0)
+    return labels
+
+
+def _most_typical(X: np.ndarray, n_neighbors: int) -> int:
+    """Index of the densest point: smallest mean distance to its K nearest."""
+    m = X.shape[0]
+    if m == 1:
+        return 0
+    K = min(n_neighbors, m - 1)
+    D = np.linalg.norm(X[:, None, :] - X[None, :, :], axis=2)
+    np.fill_diagonal(D, np.inf)
+    knn_mean = np.sort(D, axis=1)[:, :K].mean(axis=1)
+    return int(np.argmin(knn_mean))
