@@ -83,6 +83,21 @@ class GPRSurrogate:
             std = post.stddev.numpy()
         return mean * self._y_std + self._y_mean, std * self._y_std
 
+    def predict_cov(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        import torch
+        import gpytorch
+        if self._model is None:
+            raise RuntimeError("GPRSurrogate.predict_cov called before fit")
+        X = np.asarray(X, dtype=np.float64)
+        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32)
+        self._model.eval()
+        self._likelihood.eval()
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            post = self._likelihood(self._model(tx))
+            mean = post.mean.numpy()
+            cov = post.covariance_matrix.numpy()
+        return mean * self._y_std + self._y_mean, cov * (self._y_std ** 2)
+
     def clone(self) -> "GPRSurrogate":
         return GPRSurrogate(nu=self.nu, n_iters=self.n_iters, lr=self.lr)
 
@@ -166,6 +181,22 @@ class BNNSurrogate:
         mean = obs.mean(0) * self._y_std + self._y_mean
         std = obs.std(0) * self._y_std
         return mean, std
+
+    def predict_cov(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        import torch
+        import pyro
+        from pyro.infer import Predictive
+        if self._guide is None:
+            raise RuntimeError("BNNSurrogate.predict_cov called before fit")
+        X = np.asarray(X, dtype=np.float64)
+        xt = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32)
+        pred = Predictive(self._model, guide=self._guide,
+                          num_samples=self.n_predict, return_sites=["obs"])
+        with torch.no_grad():
+            obs = pred(xt)["obs"].detach().numpy()  # (n_predict, n), standardized
+        mean = obs.mean(0) * self._y_std + self._y_mean
+        cov = np.cov(obs, rowvar=False) * (self._y_std ** 2)
+        return mean, np.atleast_2d(cov)
 
     def clone(self) -> "BNNSurrogate":
         return BNNSurrogate(hidden=self.hidden, n_steps=self.n_steps, lr=self.lr,

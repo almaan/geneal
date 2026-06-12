@@ -9,6 +9,7 @@ class Surrogate(Protocol):
     """Maps gene embeddings -> predicted target with uncertainty."""
     def fit(self, X: np.ndarray, y: np.ndarray) -> "Surrogate": ...
     def predict(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]: ...  # (mean, std)
+    def predict_cov(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]: ...  # (mean, full covariance)
     def clone(self) -> "Surrogate": ...
 
 
