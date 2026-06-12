@@ -6,6 +6,7 @@ from geneal.interfaces import Surrogate, Acquisition, Selection, NoiseModel, Met
 class _Surr:
     def fit(self, X, y): return self
     def predict(self, X): return np.zeros(len(X)), np.ones(len(X))
+    def predict_cov(self, X): return np.zeros(len(X)), np.eye(len(X))
     def clone(self): return _Surr()
 
 
