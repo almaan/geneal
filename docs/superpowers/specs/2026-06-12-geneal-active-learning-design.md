@@ -26,26 +26,70 @@ The closest prior work, NAIAD, shares the AL-over-rounds frame on CRISPR data an
 argues for *adaptive gene embeddings that scale with training data*, using a
 **greedy max-predicted-effect** acquisition. To have a defensible edge rather than
 re-implementing NAIAD's easier single-gene sub-problem, geneal has two primary
-contributions:
+contributions — one **method**, one **benchmark axis**:
 
-1. **Zero-shot foundation-model embedding benchmark.** How far does an AL loop get
-   using FROZEN gene/protein FM embeddings (scPRINT, ESM2) as the prior, with no
-   perturbation-trained embeddings? This directly contrasts NAIAD's
-   adaptive-embedding claim. Embedding source is a first-class experimental axis
-   (scPRINT vs ESM2). The AL *baseline* — the control the AL loop must beat — is
-   **random selection** (no surrogate), not an alternative embedding. A random
-   embedding is kept only as a harness sanity/ablation: with signal-free
-   embeddings, AL should not beat random selection. (No PCA baseline — PCA needs a
-   feature matrix to decompose; the embeddings are already the only per-gene
-   features we have.)
+#### Primary method: quality-weighted k-DPP batch acquisition
 
-2. **Batch acquisition under realistic wet-lab batch sizes.** NAIAD acquires
-   greedily. A real knockout round buys ~10 assays at once, not 1 — so the
-   scientific question is whether the optimal *batch composition* differs from
-   greedy top-q, and how much a diversity-aware batch (fantasy/q-acquisition)
-   beats greedy as batch size grows. This is an experimental axis (batch size q ×
-   selection strategy: top-q greedy vs greedy+fantasies vs future diverse-batch),
-   measured by recovery-vs-rounds at fixed total budget.
+The core technical contribution. NAIAD acquires **greedily** (top single predicted
+effect); a real knockout round buys ~q≈10 assays at once. Picking the q
+highest-scoring genes wastes assays on redundant, near-identical knockouts. We want
+a batch that is simultaneously **high-performing and diverse**: many high-scoring
+genes, no two of which are near-duplicates in *outcome* space.
+
+Formalize as a **quality-weighted Determinantal Point Process (k-DPP)**. Build a
+kernel over candidates:
+
+```
+L_ij = q_i · S_ij · q_j
+```
+
+- `q_i` = **quality** of gene i = a pluggable acquisition score (UCB / EI / mean;
+  default UCB). Reuses the existing acquisition layer — the DPP wraps it.
+- `S_ij` = **outcome similarity** = the surrogate's posterior *correlation* between
+  genes i and j, from the joint predictive covariance.
+
+Select the size-q subset maximizing `det(L_B)`. The determinant is large only when
+picks are both high-quality (large diagonal) and non-redundant (off-diagonal
+correlation small → near-orthogonal rows). Two near-identical genes make their rows
+collinear → determinant collapses → the DPP will not take both.
+
+**Why this is the unification of "informative" and "diverse":**
+`log det(posterior covariance of a batch)` is the Gaussian joint entropy = the
+batch's **information gain**. So max-`det` IS an information-theoretic batch
+acquisition, with outcome-covariance-driven diversity built in — not q independent
+high-scorers (NAIAD greedy), not an input-space diversity heuristic (greedy +
+fantasies). Greedy top-q, greedy+fantasies, and random selection are all baselines
+the DPP must beat.
+
+**Solver:** subset max-`det` is NP-hard exactly. Ship **greedy MAP** (add the gene
+with largest marginal det-gain, q times — fast, near-optimal, deterministic) as the
+default, with exact/DPP-sampling pluggable behind the same Selection interface.
+
+**Surrogate requirement (new vs v1):** this needs the surrogate to expose a **joint
+predictive covariance** (`predict_cov(X) -> (mean, cov)`), not just marginal std.
+gpytorch GP provides it natively; the BNN provides it via the sample covariance of
+posterior predictive draws.
+
+**Evaluation — does it deliver diverse AND high-performing batches?**
+At fixed total budget, per round: (1) recall@k vs rounds (primary — diversity
+should recover the top-k set faster by not wasting assays on redundancy); (2) batch
+quality = mean true effect of the selected batch; (3) batch diversity = mean
+pairwise outcome-distance within the batch (or `det` of the selected sub-covariance).
+Headline result: a **quality–diversity Pareto plot** — greedy top-q sits in the
+high-quality/low-diversity corner, random selection in the high-diversity/low-quality
+corner; the k-DPP should Pareto-dominate both and win on recall@k. NAIAD's greedy
+acquisition lives in a single corner and cannot produce this frontier.
+
+#### Benchmark axis: zero-shot foundation-model embeddings
+
+Supporting, not the headline. How far does the loop get using FROZEN gene/protein
+FM embeddings (scPRINT, ESM2) as the prior, with no perturbation-trained embeddings
+(contra NAIAD's adaptive embeddings)? Embedding source is an experimental axis
+(scPRINT vs ESM2). The AL *baseline* — the control the AL loop must beat — is
+**random selection** (no surrogate). A random embedding is kept only as a
+sanity/ablation: with signal-free embeddings, AL should not beat random selection.
+(No PCA baseline — PCA needs a feature matrix to decompose; the embeddings are
+already the only per-gene features we have.)
 
 Held in reserve: cross-cell-line transfer via FM embeddings. NAIAD does gene
 *pairs*; geneal v1 is single-gene — no combinatorial-novelty claim without
@@ -62,8 +106,8 @@ machine-readable structured logs; and verbose, parseable outputs.
 | Decision | Choice |
 |---|---|
 | Success metric | **Pluggable** (in Objective). Default = **recover top-k set** (recall@k curve vs rounds). |
-| Batch acquisition | Each round acquires a batch of size `q`. Selection is **pluggable**: ship **top-q greedy** + **greedy+fantasies**, build for more. |
-| Surrogate I/O | **Per-cell-line** model: `gene_embedding -> effect`. Abstractions keep **cell-line-as-feature** open for later. |
+| Batch acquisition | Each round acquires a batch of size `q`. Selection is **pluggable**: v1 ships **top-q greedy** + **greedy+fantasies** (baselines); the **primary method** is a **quality-weighted k-DPP** (`L_ij = q_i·S_ij·q_j`, greedy-MAP default + sampling pluggable). See §1. |
+| Surrogate I/O | **Per-cell-line** model: `gene_embedding -> effect`. v1 surrogate exposes `predict(X)->(mean,std)`; the k-DPP method additionally needs **joint covariance** `predict_cov(X)->(mean,cov)` (gpytorch native; BNN via sample cov). Abstractions keep **cell-line-as-feature** open for later. |
 | Embeddings | **Precompute + cache** offline (genes × dim matrix). Source behind an **adapter**. Heavy models stay out of the AL loop. |
 | First embedding source | **scPRINT** first; fall back to **ESM2** if derivation is hard. Both acceptable. |
 | Environment | **Fresh micromamba env `geneal`** (user creates/populates from provided package list). Not shared `genml`. |
