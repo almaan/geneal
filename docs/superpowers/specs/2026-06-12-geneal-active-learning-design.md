@@ -23,16 +23,27 @@ it is publishable.
 ### Scientific positioning (vs NAIAD, arxiv 2411.12010)
 
 The closest prior work, NAIAD, shares the AL-over-rounds frame on CRISPR data and
-argues for *adaptive gene embeddings that scale with training data*. To have a
-defensible edge rather than re-implementing NAIAD's easier single-gene sub-problem,
-geneal's primary contribution is the **zero-shot foundation-model embedding
-benchmark**: how far does an AL loop get using FROZEN gene/protein FM embeddings
-(scPRINT, ESM2) as the prior, with no perturbation-trained embeddings? This
-directly contrasts NAIAD's adaptive-embedding claim. Concretely this requires
-treating embedding source as a first-class experimental axis (scPRINT vs ESM2 vs
-PCA/random baseline). Differentiators held in reserve: batch acquisition regime
-(NAIAD uses greedy) and cross-cell-line transfer via FM embeddings. NAIAD does
-gene *pairs*; geneal v1 is single-gene — no combinatorial-novelty claim without
+argues for *adaptive gene embeddings that scale with training data*, using a
+**greedy max-predicted-effect** acquisition. To have a defensible edge rather than
+re-implementing NAIAD's easier single-gene sub-problem, geneal has two primary
+contributions:
+
+1. **Zero-shot foundation-model embedding benchmark.** How far does an AL loop get
+   using FROZEN gene/protein FM embeddings (scPRINT, ESM2) as the prior, with no
+   perturbation-trained embeddings? This directly contrasts NAIAD's
+   adaptive-embedding claim. Requires treating embedding source as a first-class
+   experimental axis (scPRINT vs ESM2 vs PCA/random baseline).
+
+2. **Batch acquisition under realistic wet-lab batch sizes.** NAIAD acquires
+   greedily. A real knockout round buys ~10 assays at once, not 1 — so the
+   scientific question is whether the optimal *batch composition* differs from
+   greedy top-q, and how much a diversity-aware batch (fantasy/q-acquisition)
+   beats greedy as batch size grows. This is an experimental axis (batch size q ×
+   selection strategy: top-q greedy vs greedy+fantasies vs future diverse-batch),
+   measured by recovery-vs-rounds at fixed total budget.
+
+Held in reserve: cross-cell-line transfer via FM embeddings. NAIAD does gene
+*pairs*; geneal v1 is single-gene — no combinatorial-novelty claim without
 extending there.
 
 ### Self-evolving requirement
