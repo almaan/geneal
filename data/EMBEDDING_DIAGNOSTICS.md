@@ -158,3 +158,22 @@ Supervised projection cannot extract it from FMs (fails to generalize). Implicat
 for diversity-aware batch AL: it requires perturbation-derived priors; zero-shot FM
 and graph priors are provably insufficient. (co-dependency works but is label-adjacent
 — the honest tension at the heart of the result.)
+
+## Gradient-space diversity (BADGE-style) also dead — 2026-06-13
+
+Tested whether diversity in a non-input space helps: BADGE gradient-embedding
+(residual×features) and uncertainty-weighted features, NN/random ratio on ACH-000147:
+
+| | input-NN | gradient-emb NN | uncertainty-feat |
+|---|---|---|---|
+| ESM2 | 0.872 | 0.861 | 0.871 |
+| PubMedBERT | 0.851 | 0.846 | 0.851 |
+
+Gradient-space ≈ input-space (~0.85). BADGE would NOT help. Reason: the BADGE
+gradient is residual×features where features ARE the FM embedding, so gradient-space
+is a re-weighting of the same geometry — it cannot manufacture outcome-redundancy the
+embedding lacks. CLINCHER: the failure is representation-level, not algorithm-level.
+Every diversity SOURCE tested (input-NN, gradient-space, uncertainty-space, supervised
+projection, STRING graph, 3 FM modalities) gives ~0.86; only perturbation-derived
+co-dependency (0.39) carries the signal. The diversity ALGORITHM is irrelevant when
+the information isn't in any available gene representation.
