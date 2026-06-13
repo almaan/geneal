@@ -120,3 +120,22 @@ k-DPP ties `fantasy` (the cheap quality+diversity proxy) on every metric, so
 methods. Needs multiple line pairs + more seeds to confirm before it can anchor
 a paper claim.
 
+
+## Selectivity power-up — 8 cell-line pairs (statistical test)
+
+8 Breast-vs-X pairs (Lymphoid, CNS, Lung, Ovary, Myeloid, Bowel, Skin, Pancreas),
+3 seeds, differential target, OLD 35M/500-gene embedding.
+
+mean recall@50: kdpp 0.319 = fantasy 0.319 > typiclust 0.318 > random 0.307 >
+coreset 0.297 > greedy 0.287.
+
+Paired across pairs: kdpp vs greedy +0.0325, wins 6/8, **Wilcoxon p=0.109 (NOT
+significant)**. fantasy vs greedy identical (+0.0325, 6/8, p=0.25).
+
+Honest read: the selectivity flip (greedy worst, quality+diversity best) is a REAL
+WEAK TREND that holds across pairs but is NOT statistically significant and is
+small (~3 pts). The whole field is compressed (0.29-0.32) — partly the weak
+35M/inert-panel embedding. k-DPP ties fantasy throughout. Across ALL experiments,
+k-DPP never SIGNIFICANTLY beats greedy. Re-running selectivity on the HVG/650M
+panel is warranted (compression may be embedding-driven), but the headline can no
+longer be "k-DPP wins".
