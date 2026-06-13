@@ -83,3 +83,29 @@ single-cell-expression (scPRINT), biomedical-literature (PubMedBERT) — ALL giv
 knockout-outcome CORRELATION, only a perturbation-derived representation (co-dependency) does.
 Note quality vs diversity are separable: PubMedBERT helps the QUALITY term (best R²) while
 being useless for the DIVERSITY term.
+
+## Is the gap inherent or a metric problem? — INHERENT (supervised-projection diagnostic, 2026-06-13)
+
+Trained a supervised linear projection (->64d) of each FM embedding to make
+embedding cosine match true outcome-redundancy (cross-cell-line effect-PROFILE
+cosine), then measured the NN/random redundancy ratio on HELD-OUT genes (70/30
+gene split):
+
+| embedding | raw ratio | supervised projection (held-out genes) |
+|---|---|---|
+| ESM2 | 0.859 | 0.927 (WORSE) |
+| PubMedBERT | 0.889 | 0.982 (WORSE) |
+
+The supervised projection FAILED TO GENERALIZE — the ratio got worse on held-out
+genes, the signature of structure that is ABSENT, not merely hidden in a bad metric.
+If redundancy were latent-but-present, a learned metric would generalize and lower
+the ratio; instead it memorized training-gene redundancy and did not transfer.
+
+**CONCLUSION: the FM redundancy gap is INHERENT, not a metric/geometry artifact.**
+Confirmed three ways: (1) three FM modalities fail identically; (2) PCA + kernel
+choice (RBF/cosine) revive off-diagonals but not the redundancy ratio; (3) a
+supervised projection cannot recover generalizable redundancy. Knockout-outcome
+redundancy is a PERTURBATIONAL property absent from gene-identity foundation models
+(sequence/expression/literature). It cannot be transformed-out of FM embeddings; it
+requires a perturbation-derived representation (co-dependency) or an external
+relational prior (pathway/GRN graph).
