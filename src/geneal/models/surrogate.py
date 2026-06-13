@@ -13,10 +13,12 @@ class GPRSurrogate:
     surrogate with the same hyperparameters (used for fantasy batching).
     """
 
-    def __init__(self, nu: float = 2.5, n_iters: int = 100, lr: float = 0.1) -> None:
+    def __init__(self, nu: float = 2.5, n_iters: int = 100, lr: float = 0.1,
+                 device: str = "cpu") -> None:
         self.nu = nu
         self.n_iters = n_iters
         self.lr = lr
+        self.device = device
         self._model = None
         self._likelihood = None
         self._x_mean = None
@@ -52,10 +54,12 @@ class GPRSurrogate:
         y = np.asarray(y, dtype=np.float64)
         self._x_mean, self._x_std = X.mean(0), X.std(0) + 1e-8
         self._y_mean, self._y_std = y.mean(), y.std() + 1e-8
-        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32)
-        ty = torch.tensor((y - self._y_mean) / self._y_std, dtype=torch.float32)
+        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32).to(self.device)
+        ty = torch.tensor((y - self._y_mean) / self._y_std, dtype=torch.float32).to(self.device)
 
         self._model, self._likelihood = self._build(tx, ty)
+        self._model = self._model.to(self.device)
+        self._likelihood = self._likelihood.to(self.device)
         self._model.train()
         self._likelihood.train()
         opt = torch.optim.Adam(self._model.parameters(), lr=self.lr)
@@ -74,13 +78,13 @@ class GPRSurrogate:
         if self._model is None:
             raise RuntimeError("GPRSurrogate.predict called before fit")
         X = np.asarray(X, dtype=np.float64)
-        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32)
+        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32).to(self.device)
         self._model.eval()
         self._likelihood.eval()
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             post = self._likelihood(self._model(tx))
-            mean = post.mean.numpy()
-            std = post.stddev.numpy()
+            mean = post.mean.cpu().numpy()
+            std = post.stddev.cpu().numpy()
         return mean * self._y_std + self._y_mean, std * self._y_std
 
     def predict_cov(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -96,17 +100,18 @@ class GPRSurrogate:
         if self._model is None:
             raise RuntimeError("GPRSurrogate.predict_cov called before fit")
         X = np.asarray(X, dtype=np.float64)
-        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32)
+        tx = torch.tensor((X - self._x_mean) / self._x_std, dtype=torch.float32).to(self.device)
         self._model.eval()
         self._likelihood.eval()
         with torch.no_grad():
             post = self._model(tx)  # latent f-posterior, no observation noise
-            mean = post.mean.numpy()
-            cov = post.covariance_matrix.numpy()
+            mean = post.mean.cpu().numpy()
+            cov = post.covariance_matrix.cpu().numpy()
         return mean * self._y_std + self._y_mean, cov * (self._y_std ** 2)
 
     def clone(self) -> "GPRSurrogate":
-        return GPRSurrogate(nu=self.nu, n_iters=self.n_iters, lr=self.lr)
+        return GPRSurrogate(nu=self.nu, n_iters=self.n_iters, lr=self.lr,
+                            device=self.device)
 
 
 class BNNSurrogate:
