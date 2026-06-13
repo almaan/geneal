@@ -198,3 +198,27 @@ f-for-quality (greedy) works = pile into high f; f-for-diversity is anti-helpful
 real diversity needs joint outcome-redundancy that no FM embedding nor f provides.
 This is why greedy wins extreme recovery and diversity only helps the harder
 (uncertain, selectivity) objectives.
+
+## Mechanism-diversity objective (q=lethality, S=STRING) — structure exists but no controllable tradeoff (2026-06-13)
+
+Reframed objective: find high-lethality genes spanning DIVERSE mechanisms (a target
+portfolio), q=predicted lethality, S=STRING mechanism similarity. Structure IS present:
+top-50 lethal genes are 6x mechanistically denser than random (STRING 0.30 vs 0.05),
+split into ~13 mechanism-components. k-DPP DOES spread: 30/30 distinct mechanisms vs
+greedy's 7-16.
+
+BUT no controllable quality-diversity frontier: tempering the quality weight q^β
+(β=0.5..16) barely moves the result — k-DPP gets max mechanism diversity at fixed
+(sub-greedy) lethality regardless of β. ON ONE LINE (ACH-000696) it achieved 16->30
+mechanisms at IDENTICAL lethality (the ideal); on others it cost ~0.3 lethality and
+β couldn't recover it. ROOT CAUSE: STRING is too SPARSE — among 2000 candidates, the
+greedy-MAP can almost always find 30 mutually-UNconnected genes, so S≈identity for the
+selected set and det(diag(q^β) I diag(q^β))=∏q^{2β} has the same argmax for all β.
+Diversity is 'free' in a sparse graph, so there's no tension to tune. Same structural
+wall (weak/sparse similarity signal) as the outcome-redundancy case, new form.
+
+OVERALL: across outcome-redundancy AND mechanism-diversity framings, and across
+FM/graph/gradient/f-proximity similarity sources, no representation gives a similarity
+that is both (a) meaningful for the task and (b) dense enough to create a tunable
+quality-diversity tradeoff. Greedy quality-maximization remains the robust choice;
+diversity-aware batch AL lacks an actionable signal here.
