@@ -60,3 +60,26 @@ source that is NOT an FM embedding: a GRN/pathway graph kernel, or DepMap's own
 gene co-dependency (SVD of the gene×cell-line effect matrix). FM embeddings encode
 what their pretraining saw (sequence family / expression context), not which gene
 knockouts have correlated lethality.
+
+## PubMedBERT (biomedical literature text) — best FM predictor, STILL no diversity structure (2026-06-13)
+
+NeuML/pubmedbert-base-embeddings on per-gene NCBI summary text (symbol+name+summary;
+2029/2043 have real NCBI summaries), 768-dim, same HVG panel, ACH-000147:
+
+| diagnostic | ESM2-650M | scPRINT | PubMedBERT | co-dependency |
+|---|---|---|---|---|
+| GP held-out R² | 0.095 | -0.004 | **0.195** | 0.791 |
+| redundancy ratio | 0.890 | 0.889 | 0.854 | 0.386 |
+| k-DPP kernel off-diag \|S\| | 0.0000 | 0.0000 | **0.0000** | 0.0575 |
+
+**PubMedBERT is the best PREDICTIVE FM embedding** (GP R² 0.195, ~2x ESM2) — literature
+text about gene function carries more lethality signal than sequence or expression.
+(Its Ridge R² is very negative: 768-dim text embeddings overfit OLS; GP is the valid read.)
+
+**But it STILL has no outcome-redundancy structure** (ratio 0.854, k-DPP kernel |S|=0).
+THREE foundation-model embeddings across THREE modalities — protein-sequence (ESM2),
+single-cell-expression (scPRINT), biomedical-literature (PubMedBERT) — ALL give an inert
+(|S|≈0) diversity kernel. The negative result is modality-general: no FM embedding encodes
+knockout-outcome CORRELATION, only a perturbation-derived representation (co-dependency) does.
+Note quality vs diversity are separable: PubMedBERT helps the QUALITY term (best R²) while
+being useless for the DIVERSITY term.
