@@ -31,3 +31,32 @@ nor (on the embedding axis) the panel change rescued predictive signal or outcom
 structure. scPRINT (single-cell-expression-trained, encodes functional /
 co-expression structure) is the indicated next representation. The HVG panel is
 kept regardless — it is an unambiguous improvement.
+
+## scPRINT (expression-based FM) — does NOT fix it either (2026-06-13)
+
+scPRINT zero-shot gene embedding (medium-v1.5, freeze_embeddings=False so genuinely
+learned, 256-dim), mapped Entrez->Ensembl (2043/2043), same HVG panel, ACH-000147:
+
+| diagnostic | ESM2-650M | scPRINT |
+|---|---|---|
+| GP held-out R² | 0.095 | -0.004 |
+| Ridge held-out R² | 0.060 | **0.146** |
+| NN/random redundancy ratio | 0.890 | **0.889** |
+| k-DPP kernel off-diag \|S\| | 0.0000 | 0.0000 |
+
+**Conclusion — strong general negative result.** TWO foundation-model gene
+embeddings of completely different modalities — protein-sequence (ESM2) and
+single-cell-expression (scPRINT) — BOTH fail to encode knockout-outcome-correlation
+structure: embedding-near genes are no more similar in lethality than random genes
+(ratio ~0.89 for both), and the k-DPP diversity kernel is perfectly diagonal (|S|=0)
+for both. Batch-diversity acquisition collapses to greedy regardless of FM embedding.
+Note scPRINT has MORE linearly-decodable lethality signal (Ridge R² 0.146 > ESM2
+0.060) but its GP R² is ~0 (kernel/scale mismatch in the 256-dim learned space) and
+it still provides no pairwise outcome structure.
+
+The bottleneck is FUNDAMENTAL to FM-embedding-based diversity AL for knockout
+discovery, not a representation-choice detail. The fix is a structured similarity
+source that is NOT an FM embedding: a GRN/pathway graph kernel, or DepMap's own
+gene co-dependency (SVD of the gene×cell-line effect matrix). FM embeddings encode
+what their pretraining saw (sequence family / expression context), not which gene
+knockouts have correlated lethality.
