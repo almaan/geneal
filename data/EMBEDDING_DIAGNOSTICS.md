@@ -109,3 +109,20 @@ redundancy is a PERTURBATIONAL property absent from gene-identity foundation mod
 (sequence/expression/literature). It cannot be transformed-out of FM embeddings; it
 requires a perturbation-derived representation (co-dependency) or an external
 relational prior (pathway/GRN graph).
+
+## Multi-cell-line confirmation (5 lines, out-of-sample) — 2026-06-13
+
+Repeated the diagnostic on 5 cell lines distinct from ACH-000147
+(ACH-000219/651/696/881/971), all 4 representations:
+
+redundancy ratio (lower=more outcome structure):
+  ESM2 0.86-0.89 | scPRINT 0.86-0.91 | PubMedBERT 0.82-0.85 | codep 0.39-0.52
+GP held-out R2:
+  ESM2 ~0 | scPRINT ~0 | PubMedBERT 0.23-0.27 | codep 0.77-0.86
+
+The finding is CONSISTENT across all 5 lines: (1) all 3 FM modalities lack
+outcome-redundancy structure (ratio 0.82-0.91); (2) PubMedBERT is reliably the best
+FM PREDICTOR (R2 ~0.23 vs ~0 for ESM2/scPRINT) — literature text carries the most
+quality signal; (3) co-dependency reliably carries both structure (ratio ~0.4) and
+prediction (R2 ~0.8). Not cell-line-specific — publication-grade robustness on the
+negative result.
