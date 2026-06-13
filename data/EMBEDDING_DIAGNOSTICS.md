@@ -126,3 +126,35 @@ FM PREDICTOR (R2 ~0.23 vs ~0 for ESM2/scPRINT) — literature text carries the m
 quality signal; (3) co-dependency reliably carries both structure (ratio ~0.4) and
 prediction (R2 ~0.8). Not cell-line-specific — publication-grade robustness on the
 negative result.
+
+## STRING PPI graph — ALSO does not carry outcome-redundancy (2026-06-13)
+
+STRING v12.0 human, 2029/2043 panel genes mapped, 99.3% with >=1 edge. Tested as a
+relational prior for S (the clean, non-label-adjacent alternative to co-dependency):
+
+- STRING-edge vs random outcome-redundancy ratio: 1.117 (Spearman(S,truth)=0.16) — real but weak (+12%).
+- HEADLINE NN/random lethality-diff ratio (ACH-000147): 0.882 (direct edges), 0.860
+  (shared-neighbor), 0.845 (score>=0.9 only). FM baseline ~0.86, co-dependency 0.39.
+
+STRING sits AT the FM baseline. A curated functional/PPI network captures general
+functional association but NOT knockout-outcome substitutability in a specific cell
+line. The graph-S k-DPP is not worth building on STRING.
+
+## FINAL synthesis — the complete representation table
+
+| representation | type | redundancy ratio | GP R2 |
+|---|---|---|---|
+| ESM2 | protein sequence FM | 0.86 | ~0 |
+| scPRINT | sc-expression FM | 0.89 | ~0 |
+| PubMedBERT | literature text FM | 0.85 | 0.23 (best FM) |
+| STRING | curated PPI/pathway graph | 0.86 | (relational, n/a) |
+| co-dependency | perturbational (DepMap effects) | 0.39 | 0.80 |
+
+THESIS (bulletproof, 4 negative + 1 positive, 5+ cell lines): knockout-outcome
+redundancy in a specific cell context is captured by NO prior representation of gene
+identity or general function (sequence/expression/literature/curated-network). It is
+a context-specific PERTURBATIONAL property, recoverable only from perturbation data.
+Supervised projection cannot extract it from FMs (fails to generalize). Implication
+for diversity-aware batch AL: it requires perturbation-derived priors; zero-shot FM
+and graph priors are provably insufficient. (co-dependency works but is label-adjacent
+— the honest tension at the heart of the result.)
