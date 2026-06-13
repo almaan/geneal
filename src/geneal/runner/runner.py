@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from geneal.experiment.objects import Experiment, Method
 from geneal.metrics.diagnostics import batch_quality, batch_diversity
+from geneal.metrics.panel import evaluate_panel
 
 
 class Runner:
@@ -16,7 +17,8 @@ class Runner:
     Returns a tidy DataFrame: one row per (method, seed, round).
     """
 
-    def run(self, experiment: Experiment, seeds: Sequence[int]) -> pd.DataFrame:
+    def run(self, experiment: Experiment, seeds: Sequence[int],
+            eval_panel=None) -> pd.DataFrame:
         ds = experiment.dataset
         design = experiment.design
         metric = experiment.objective.metric
@@ -36,13 +38,13 @@ class Runner:
             for method in experiment.methods:
                 records.extend(
                     self._run_one(ds, design, metric, method, noise_vec,
-                                  init_idx, seed)
+                                  init_idx, seed, eval_panel=eval_panel)
                 )
 
         return pd.DataFrame.from_records(records)
 
     def _run_one(self, ds, design, metric, method: Method, noise_vec,
-                 init_idx, seed) -> list[dict]:
+                 init_idx, seed, eval_panel=None) -> list[dict]:
         # Per-method acquisition RNG, derived deterministically from the seed and
         # method name so methods don't share an acquisition RNG stream but runs
         # remain reproducible. Uses a stable (non-salted) hash of the name so runs
@@ -55,7 +57,8 @@ class Runner:
         revealed = list(init_idx)
         revealed_y = (ds.target[revealed] + noise_vec[revealed]).tolist()
 
-        out = [self._record(method, seed, 0, revealed, metric, ds.target, ds)]
+        out = [self._record(method, seed, 0, revealed, metric, ds.target, ds,
+                            eval_panel=eval_panel)]
 
         for r in range(1, design.n_rounds + 1):
             X_train = ds.embeddings[revealed]
@@ -77,13 +80,14 @@ class Runner:
                 revealed.append(idx)
                 revealed_y.append(float(ds.target[idx] + noise_vec[idx]))
             out.append(self._record(method, seed, r, revealed, metric,
-                                    ds.target, ds, batch=sel))
+                                    ds.target, ds, batch=sel,
+                                    eval_panel=eval_panel))
         return out
 
     @staticmethod
     def _record(method, seed, rnd, revealed, metric, target, ds,
-                batch=None) -> dict:
-        return {
+                batch=None, eval_panel=None) -> dict:
+        rec = {
             "method": method.name,
             "seed": seed,
             "round": rnd,
@@ -95,3 +99,8 @@ class Runner:
             "batch_diversity": (batch_diversity(batch, ds.embeddings)
                                 if batch is not None else float("nan")),
         }
+        if eval_panel:
+            for name, val in evaluate_panel(eval_panel, list(revealed),
+                                            target, ds.embeddings).items():
+                rec[f"eval_{name}"] = val
+        return rec
