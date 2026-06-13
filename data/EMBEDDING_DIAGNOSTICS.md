@@ -177,3 +177,24 @@ Every diversity SOURCE tested (input-NN, gradient-space, uncertainty-space, supe
 projection, STRING graph, 3 FM modalities) gives ~0.86; only perturbation-derived
 co-dependency (0.39) carries the signal. The diversity ALGORITHM is irrelevant when
 the information isn't in any available gene representation.
+
+## Can the surrogate f define proximity/redundancy? — the conceptual capstone (2026-06-13)
+
+Tested using predicted output f(x) (PubMedBERT surrogate) to define neighbors:
+- predicted-output f NN ratio: 0.79 (vs input-emb 0.85) — f DOES carry more outcome
+  structure (it projects the embedding onto the lethality-relevant direction).
+
+BUT using f-proximity for DIVERSITY is self-defeating for extreme recovery:
+- true top-50 lethal genes CLUSTER in f-space (predicted f mean 1.15, std 0.41,
+  vs all-genes mean 1.04 std 0.11). They are close together BECAUSE they are all
+  high-value. A diversity penalty on f-proximity would treat the lethal genes as
+  mutually redundant and AVOID taking more than one — directly hurting recall@k.
+
+THE CORE DISTINCTION: f-proximity ('similar predicted value') != redundancy
+('knowing one outcome tells you the other'). Two genes can both be highly lethal
+(close in f) yet INDEPENDENT (you want both). True redundancy is a JOINT property
+(does outcome_i predict outcome_j) = co-dependency, orthogonal to f. Hence:
+f-for-quality (greedy) works = pile into high f; f-for-diversity is anti-helpful;
+real diversity needs joint outcome-redundancy that no FM embedding nor f provides.
+This is why greedy wins extreme recovery and diversity only helps the harder
+(uncertain, selectivity) objectives.
