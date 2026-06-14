@@ -87,3 +87,21 @@ KEY DISTINCTION that emerged: co-dependency was CONTINUOUS (every pair has a val
 and collapse. The tradeoff likely needs EITHER (a) candidates concentrated in few
 large complexes (dense regime — untested 'dense-complex stress test'), OR (b) a
 continuous similarity, not binary co-membership. Open question, not yet resolved.
+
+## Continuous similarity (STRING raw scores) — STILL no tradeoff; the root cause is now clear (2026-06-13)
+
+Continuous (un-thresholded) STRING-S, β-temper sweep: β still inert (ACH-000147 0.69->0.75
+across β=0.5..16; ACH-000881 flat 0.84). 
+
+ROOT CAUSE (final, general): for the quality-temper β to trace a lethality-vs-diversity
+frontier, the HIGH-LETHALITY genes must be densely similar TO EACH OTHER in S — only then
+does taking many lethal genes force redundancy the DPP trades against. In ALL identity/
+function similarities (3 FM modalities, STRING binary+continuous, CORUM binary+continuous),
+high-lethality genes are NOT densely inter-similar — they spread across S — so the greedy-MAP
+always finds ~30 high-q mutually-dissimilar genes and diversity is free (β inert).
+Co-dependency is the ONLY exception and NOT by coincidence: lethal genes are densely
+co-dependent because correlated essentiality is exactly what co-dependency measures. The
+property that makes a similarity yield a tunable quality-diversity tradeoff (lethal genes
+clustering within it) IS the perturbational property no identity/function representation has.
+9 similarity sources/forms tested; all fail for this one root reason. This is intrinsic,
+not a graph-choice or binary-vs-continuous detail.
