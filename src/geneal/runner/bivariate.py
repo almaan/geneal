@@ -18,10 +18,11 @@ class BivariateALRunner:
         self.shortlist = shortlist   # run EHVI only on the top-N most promising candidates
 
     def run(self, X, efficacy, toxicity, n_initial, n_rounds, batch_size, seed,
-            tox_known=False):
-        """tox_known=True: toxicity is an ORACLE (known a priori for all genes) —
-        only efficacy is learned. This is the ceiling condition for comparing
-        against learning toxicity. Default False = both objectives learned."""
+            tox_known=False, eff_known=False):
+        """tox_known / eff_known: treat that objective as an ORACLE (true value,
+        zero uncertainty). tox_known only = the a-priori-toxicity condition (learn
+        efficacy, know toxicity). BOTH = full-information oracle = absolute
+        hypervolume ceiling. Default both False = learn both."""
         X = np.asarray(X, float)
         eff = np.asarray(efficacy, float); tox = np.asarray(toxicity, float)
         n = len(eff)
@@ -40,22 +41,24 @@ class BivariateALRunner:
         def record(rnd):
             pts = np.array([[eff[i], -tox[i]] for i in revealed])
             return {"round": rnd, "n_revealed": len(revealed),
-                    "hypervolume": hypervolume2d(pts, ref)}
+                    "hypervolume": hypervolume2d(pts, ref),
+                    "revealed": list(revealed)}
 
         hist = [record(0)]
         for r in range(1, n_rounds + 1):
-            ye = np.array([eff[i] + noise_e[i] for i in revealed])
-            yt = np.array([tox[i] + noise_t[i] for i in revealed])
-            se = self.make().fit(X[revealed], ye)
             cand = [i for i in range(n) if i not in set(revealed)]
             if not cand:
                 break
-            me, sde = se.predict(X[cand])
-            if tox_known:
-                mt = tox[cand]; sdt = np.zeros(len(cand))   # oracle toxicity
+            if eff_known:
+                me = eff[cand]; sde = np.zeros(len(cand))    # oracle efficacy
             else:
-                st = self.make().fit(X[revealed], yt)
-                mt, sdt = st.predict(X[cand])
+                ye = np.array([eff[i] + noise_e[i] for i in revealed])
+                me, sde = self.make().fit(X[revealed], ye).predict(X[cand])
+            if tox_known:
+                mt = tox[cand]; sdt = np.zeros(len(cand))    # oracle toxicity
+            else:
+                yt = np.array([tox[i] + noise_t[i] for i in revealed])
+                mt, sdt = self.make().fit(X[revealed], yt).predict(X[cand])
             mean = np.column_stack([me, -mt])     # maximize eff, -tox
             std = np.column_stack([sde, sdt])
             # shortlist: run the (slow) MC-EHVI only on the most promising
