@@ -22,6 +22,7 @@ from geneal.data.depmap import load_gene_effect, parse_entrez
 from geneal.models.surrogate import GPRSurrogate
 from geneal.models.noise import GaussianNoise
 from geneal.runner.bivariate import BivariateALRunner
+from geneal.models.hedged_selection import HedgedSelect
 from geneal.metrics.portfolio import pathway_concentration, dropout_robustness
 
 _SYM = re.compile(r"^(.*?)\s*\(\d+\)$")
@@ -104,9 +105,14 @@ def main():
                         st = GPRSurrogate(n_iters=80).fit(Xs[revealed], ts[revealed])
                         pe, _ = se.predict(Xs); pt, _ = st.predict(Xs)
                         K = args.K
-                        eff_pick = list(np.argsort(pe)[::-1][:K])               # efficacy-only
-                        joint_pick = list(np.argsort(pe - pt)[::-1][:K])         # selectivity
-                        for mname, pick in [("efficacy_only", eff_pick), ("joint", joint_pick)]:
+                        sel_score = pe - pt
+                        eff_pick = list(np.argsort(pe)[::-1][:K])               # efficacy-only (uncapped)
+                        joint_pick = list(np.argsort(sel_score)[::-1][:K])      # selectivity (uncapped, any pathways)
+                        joint_cap_pick = HedgedSelect(mode="cap", cap=2).select_idx(
+                            sel_score, mem, K=K)                                 # selectivity + pathway hedge
+                        for mname, pick in [("efficacy_only", eff_pick),
+                                            ("joint", joint_pick),
+                                            ("joint_cap2", joint_cap_pick)]:
                             nom_rows.append(dict(
                                 cell_line=cl, ref=ref_name, seed=sd, method=mname,
                                 mean_efficacy=float(es[pick].mean()),

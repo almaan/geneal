@@ -21,11 +21,13 @@ all lines.<br>
 <b>Hypervolume regimes</b> — <b>learned</b>: toxicity predicted + explored;
 <b>known</b>: toxicity oracle (a-priori), only efficacy learned; <b>oracle</b>:
 full information (both known) = absolute ceiling.<br>
-<b>Final nomination</b> — from the learned bivariate surrogates we nominate K targets two
-ways: <b>efficacy_only</b> (top-K by predicted lethality, ignoring toxicity) vs
-<b>joint</b> (top-K by predicted selectivity = efficacy − toxicity). Metrics below are
-TRUE values of the nominated set. <b>concentration</b> = max fraction in one pathway
-(↓ better); <b>robustness</b> = expected value surviving a random pathway dropout (↑).
+<b>Final nomination</b> — from the learned bivariate surrogates we nominate K targets,
+as a ladder: <b>efficacy_only</b> (top-K by predicted lethality, ignoring toxicity) →
+<b>joint</b> (top-K by predicted selectivity = efficacy − toxicity; pathways
+unrestricted — any pathways) → <b>joint_cap2</b> (joint, but ≤2 genes per pathway —
+the portfolio hedge). Metrics below are TRUE values of the nominated set.
+<b>concentration</b> = max fraction in one pathway (↓ better); <b>robustness</b> =
+expected value surviving a random pathway dropout (↑ better).
 """
 
 _METRICS = [
@@ -136,7 +138,7 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 
 def build_bivariate_report(hv, nom, out_path, scatter=None, contrast="?", K=30,
                            title="geneal — bivariate efficacy-toxicity active learning") -> Path:
-    order = [m for m in ["efficacy_only", "joint"] if m in set(nom.method)]
+    order = [m for m in ["efficacy_only", "joint", "joint_cap2"] if m in set(nom.method)]
     # cost-of-learning headline
     last = hv["round"].max()
     def hvf(cond):
