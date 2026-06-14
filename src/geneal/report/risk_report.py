@@ -89,10 +89,9 @@ def _scatter(scatter_df):
     fig.update_layout(template="simple_white",
                       xaxis_title="efficacy: lethality in this line  (→ more potent)",
                       yaxis_title="toxicity: common-essential score  (↑ more toxic)",
-                      height=480, margin=dict(l=60, r=20, t=10, b=50),
-                      legend=dict(orientation="h", y=1.12),
-                      title=f"Efficacy vs toxicity ({cl}): efficacy-only picks reach into "
-                            f"high-toxicity genes; selective stays low-toxicity")
+                      height=540, margin=dict(l=70, r=30, t=20, b=110),
+                      legend=dict(orientation="h", yanchor="top", y=-0.22,
+                                  xanchor="left", x=0))
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
