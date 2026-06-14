@@ -1,10 +1,15 @@
 # src/geneal/report/risk_report.py
-"""Detailed HTML report for the risk-aware target-nomination experiment.
+"""Detailed HTML report for risk-aware target nomination.
 
-Consumes a risk parquet (rows: cell_line, seed, method, selective_lethality,
-concentration, robustness, n_pathways) and emits an elegant self-contained HTML:
-per-metric mean+/-95%CI tables (method rows), error-bar curves over cap level,
-the efficacy-risk Pareto, and a per-cell-line breakdown."""
+Compares three nomination strategies and evaluates each on independent
+ground-truth axes (efficacy, toxicity, pathway risk):
+  efficacy         - maximize predicted lethality only (ignores toxicity + pathway)
+  selective        - maximize lethality MINUS a common-essential toxicity penalty
+  selective_cap{c} - selective, with at most c genes per pathway (portfolio hedge)
+
+Emits: a glossary; an efficacy-vs-toxicity scatter (the dual-optimization story);
+a strategy-progression table; per-metric error-bar curves + mean+/-95%CI tables;
+and a per-cell-line breakdown."""
 from __future__ import annotations
 from pathlib import Path
 import numpy as np
@@ -12,20 +17,90 @@ import pandas as pd
 import plotly.graph_objects as go
 from jinja2 import Environment, BaseLoader
 
+# (column, label, higher_is_better, one-line definition)
 _METRICS = [
-    ("selective_lethality", "Selective lethality (efficacy)",
-     "Mean true selective-lethality of the nominated portfolio (higher = better targets)."),
-    ("concentration", "Pathway concentration (RISK)",
-     "Max fraction of the portfolio in any single pathway (lower = better hedged)."),
-    ("robustness", "Dropout robustness",
-     "Expected fraction of portfolio value surviving a random single-pathway dropout (higher = safer)."),
+    ("mean_efficacy", "Mean efficacy (lethality)", True,
+     "Mean true knockout-lethality (−Chronos effect) of the nominated targets in THIS cell line. Higher = more potent portfolio."),
+    ("max_efficacy", "Max efficacy (best single hit)", True,
+     "Lethality of the single most-lethal target in the portfolio. Shows the best hit is preserved even when the mean drops."),
+    ("mean_toxicity", "Mean toxicity (common-essential)", False,
+     "Mean common-essential score = fraction of ALL cell lines where the gene is lethal. High = pan-essential = likely toxic to normal tissue. LOWER is safer."),
+    ("concentration", "Pathway concentration", False,
+     "Max fraction of the portfolio sitting in a single pathway/complex. LOWER = better hedged against a pathway turning out toxic/undruggable."),
+    ("robustness", "Dropout robustness", True,
+     "Expected fraction of portfolio value surviving if one random pathway is eliminated (toxicity/failure). Higher = safer bet."),
 ]
+
+_GLOSSARY = """
+<b>Strategies</b><br>
+&bull; <b>efficacy</b> — pick the K targets with highest predicted lethality, ignoring toxicity and pathway. The naive baseline (&ldquo;maximize efficacy, check safety later&rdquo;).<br>
+&bull; <b>selective</b> — pick K maximizing lethality MINUS a common-essential toxicity penalty (joint efficacy+safety optimization).<br>
+&bull; <b>selective_cap&lt;c&gt;</b> — selective, but allow at most <b>c</b> genes per pathway/complex (e.g. cap2 = max 2 per pathway). The portfolio hedge against pathway-level toxicity/failure.<br><br>
+<b>Why hedge?</b> If you nominate many targets in one pathway and that pathway proves toxic in normal tissue (or undruggable), the whole bet fails together. Capping spreads the bet across independent mechanisms.
+"""
+
+
+def _ci(x):
+    x = np.asarray(x, float); n = len(x); m = float(x.mean())
+    return m, (0.0 if n < 2 else 1.96 * float(x.std(ddof=1)) / np.sqrt(n))
+
+
+def _order(df):
+    caps = sorted({int(m.split("cap")[1]) for m in df.method.unique() if "cap" in m})
+    return [x for x in (["efficacy", "selective"] +
+            [f"selective_cap{c}" for c in caps]) if x in set(df.method)]
+
+
+def _curve(df, col, label, order, higher_better):
+    fig = go.Figure()
+    means, cis = [], []
+    for meth in order:
+        mn, ci = _ci(df[df.method == meth][col]); means.append(mn); cis.append(ci)
+    fig.add_trace(go.Scatter(x=order, y=means, mode="lines+markers",
+                  error_y=dict(type="data", array=cis, visible=True, thickness=1.2, width=4)))
+    arrow = "↑ better" if higher_better else "↓ better"
+    fig.update_layout(template="simple_white", xaxis_title="strategy",
+                      yaxis_title=f"{label}  ({arrow})", height=360,
+                      margin=dict(l=60, r=20, t=10, b=70))
+    return fig.to_html(full_html=False, include_plotlyjs="cdn")
+
+
+def _scatter(scatter_df):
+    """Efficacy (x) vs toxicity (y); overlay efficacy-picks vs selective-picks.
+    The dual-optimization story: selective avoids the high-toxicity top-right."""
+    if scatter_df is None or scatter_df.empty:
+        return None
+    # pool one representative cell line for clarity (the first)
+    cl = scatter_df["cell_line"].iloc[0]
+    d = scatter_df[scatter_df["cell_line"] == cl]
+    eff, tox = d["efficacy"].to_numpy(), d["toxicity"].to_numpy()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=eff, y=tox, mode="markers", name="all candidates",
+                  marker=dict(size=4, color="#cbd5e1"), hoverinfo="skip"))
+    pe = d["picked_efficacy"].to_numpy()
+    ps = d["picked_selective"].to_numpy()
+    fig.add_trace(go.Scatter(x=eff[pe], y=tox[pe], mode="markers",
+                  name="picked by EFFICACY (ignores toxicity)",
+                  marker=dict(size=10, color="#ef4444", symbol="x")))
+    fig.add_trace(go.Scatter(x=eff[ps], y=tox[ps], mode="markers",
+                  name="picked by SELECTIVE (efficacy+safety)",
+                  marker=dict(size=10, color="#2563eb", symbol="circle-open",
+                              line=dict(width=2))))
+    fig.update_layout(template="simple_white",
+                      xaxis_title="efficacy: lethality in this line  (→ more potent)",
+                      yaxis_title="toxicity: common-essential score  (↑ more toxic)",
+                      height=480, margin=dict(l=60, r=20, t=10, b=50),
+                      legend=dict(orientation="h", y=1.12),
+                      title=f"Efficacy vs toxicity ({cl}): efficacy-only picks reach into "
+                            f"high-toxicity genes; selective stays low-toxicity")
+    return fig.to_html(full_html=False, include_plotlyjs="cdn")
+
 
 _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <title>{{ title }}</title><style>
- body{font-family:'Inter',system-ui,sans-serif;color:#1a1a2e;margin:0;padding:2.5rem 3rem;background:#fafafb;line-height:1.5}
+ body{font-family:'Inter',system-ui,sans-serif;color:#1a1a2e;margin:0;padding:2.5rem 3rem;background:#fafafb;line-height:1.55}
  h1{font-weight:700;letter-spacing:-.02em;margin-bottom:.2rem}
- .sub{color:#6b7280;margin-bottom:1.5rem}
+ .sub{color:#6b7280;margin-bottom:1.2rem}
  h2{margin-top:2.2rem;font-weight:650;border-bottom:2px solid #3b4cca;display:inline-block;padding-bottom:2px}
  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:1.1rem 1.4rem;margin:1rem 0;box-shadow:0 1px 3px rgba(0,0,0,.04)}
  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
@@ -35,93 +110,96 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  caption{text-align:left;font-weight:650;margin-bottom:.5rem}
  .note{color:#6b7280;font-size:.9rem;margin:.2rem 0 .7rem}
  .key{background:#eef2ff;border-left:3px solid #3b4cca;padding:.6rem 1rem;border-radius:6px;margin:.5rem 0}
+ .gloss{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:.8rem 1.1rem;font-size:.92rem}
 </style></head><body>
 <h1>{{ title }}</h1>
-<div class="sub">{{ n_lines }} cell lines &middot; {{ n_seeds }} seeds &middot; K={{ K }} targets/portfolio &middot; methods: {{ methods|join(', ') }}</div>
+<div class="sub">{{ n_lines }} cell lines &middot; {{ n_seeds }} seeds &middot; K={{ K }} targets/portfolio</div>
 <div class="key">{{ headline }}</div>
-<h2>Efficacy–risk frontier</h2>
-<div class="note">Each point a selection method; greedy (no hedge) vs per-pathway caps. Down-right = better-hedged at efficacy cost.</div>
-<div class="card">{{ pareto_div|safe }}</div>
+
+<h2>How to read this</h2>
+<div class="gloss">{{ glossary|safe }}</div>
+
+{% if scatter_div %}
+<h2>Efficacy vs toxicity — why optimize jointly</h2>
+<div class="note">Each grey point a candidate gene. Red ✕ = chosen by efficacy-only (ignores toxicity). Blue ○ = chosen by the selective (efficacy+safety) objective. Efficacy-only reaches into the toxic top-right; selective stays in the lethal-but-safe lower-right.</div>
+<div class="card">{{ scatter_div|safe }}</div>
+{% endif %}
+
+{% if lambda_div %}
+<h2>Efficacy–toxicity frontier (λ sweep)</h2>
+<div class="note">λ is the efficacy↔toxicity weight in the objective: target = lethality − λ·toxicity. λ=0 is pure efficacy; raising λ buys safety (lower toxicity) at the cost of potency. The shape shows the real tension — the most lethal knockouts are often pan-essential (toxic).</div>
+<div class="card">{{ lambda_div|safe }}</div>
+{% endif %}
+
+<h2>Strategy progression (efficacy → +safety → +pathway-hedge)</h2>
+<div class="note">Each row adds a constraint. Watch efficacy trade against toxicity and concentration. Max-efficacy shows the best single hit is largely preserved.</div>
+<div class="card"><table>
+<thead><tr><th>strategy</th>{% for h in prog_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in prog_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table></div>
+
 {% for m in metrics %}
 <h2>{{ m.label }}</h2><div class="note">{{ m.desc }}</div>
 <div class="card">{{ m.plot|safe }}</div>
 <div class="card"><table><caption>{{ m.label }} — mean ± 95% CI</caption>
-<thead><tr><th>method</th><th>mean ± CI</th></tr></thead><tbody>
+<thead><tr><th>strategy</th><th>mean ± CI</th></tr></thead><tbody>
 {% for r in m.rows %}<tr><td>{{ r.method }}</td><td>{{ r.cell }}</td></tr>{% endfor %}
 </tbody></table></div>{% endfor %}
-<h2>Per-cell-line breakdown</h2>
-<div class="card"><table><caption>selective-lethality / concentration / robustness, per line (greedy → cap2)</caption>
-<thead><tr><th>cell line</th>{% for h in per_line_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in per_line_rows %}<tr><td>{{ r.line }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table></div>
 </body></html>"""
 
 
-def _ci(x):
-    x = np.asarray(x, float); n = len(x); m = float(x.mean())
-    return m, (0.0 if n < 2 else 1.96 * float(x.std(ddof=1)) / np.sqrt(n))
-
-
-def _order(df):
-    caps = sorted({int(m[3:]) for m in df.method.unique() if m.startswith("cap")})
-    return [x for x in (["greedy"] + [f"cap{c}" for c in caps]) if x in set(df.method)]
-
-
-def _curve(df, col, label, order):
-    fig = go.Figure()
-    means, cis = [], []
-    for meth in order:
-        mn, ci = _ci(df[df.method == meth][col]); means.append(mn); cis.append(ci)
-    fig.add_trace(go.Scatter(x=order, y=means, mode="lines+markers",
-                  error_y=dict(type="data", array=cis, visible=True, thickness=1.2, width=4)))
-    fig.update_layout(template="simple_white", xaxis_title="selection method",
-                      yaxis_title=label, height=380, margin=dict(l=60, r=20, t=10, b=50))
-    return fig.to_html(full_html=False, include_plotlyjs="cdn")
-
-
-def _pareto(df, order):
-    agg = df.groupby("method").agg(leth=("selective_lethality", "mean"),
-                                   conc=("concentration", "mean")).reindex(order)
-    fig = go.Figure(go.Scatter(x=agg["conc"], y=agg["leth"], mode="markers+text",
-                    text=agg.index, textposition="top center", marker=dict(size=13)))
+def _lambda_pareto_div(lp):
+    """Efficacy-vs-toxicity frontier over the toxicity-penalty weight lambda."""
+    if lp is None or len(lp) == 0:
+        return None
+    agg = lp.groupby("lam").agg(eff=("mean_efficacy", "mean"),
+                                tox=("mean_toxicity", "mean")).reset_index().sort_values("lam")
+    fig = go.Figure(go.Scatter(x=agg["tox"], y=agg["eff"], mode="lines+markers+text",
+                    text=[f"λ={l:g}" for l in agg["lam"]], textposition="top right",
+                    marker=dict(size=11)))
     fig.update_layout(template="simple_white",
-                      xaxis_title="pathway concentration (max frac one pathway) — RISK",
-                      yaxis_title="selective lethality — EFFICACY",
-                      height=440, margin=dict(l=60, r=20, t=10, b=50))
+                      xaxis_title="mean toxicity (common-essential)  (↓ safer)",
+                      yaxis_title="mean efficacy (lethality)  (↑ more potent)",
+                      height=440, margin=dict(l=60, r=20, t=10, b=50),
+                      title="Efficacy–toxicity frontier: raising λ trades potency for safety")
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
-def build_risk_report(df: pd.DataFrame, out_path, title="geneal — risk-aware target nomination") -> Path:
+def build_risk_report(df: pd.DataFrame, out_path, scatter=None, lambda_pareto=None,
+                      K=30, title="geneal — risk-aware target nomination") -> Path:
     order = _order(df)
-    g = df[df.method == "greedy"]; gc, _ = _ci(g["concentration"]); gr, _ = _ci(g["robustness"])
-    cap2 = df[df.method == "cap2"]
-    headline = (f"Greedy concentrates {gc:.0%} of the portfolio in one pathway "
-                f"(robustness {gr:.2f}). Per-pathway capping (cap2) cuts concentration to "
-                f"{_ci(cap2['concentration'])[0]:.0%} and lifts robustness to "
-                f"{_ci(cap2['robustness'])[0]:.2f}, at "
-                f"{_ci(g['selective_lethality'])[0]-_ci(cap2['selective_lethality'])[0]:+.3f} "
-                f"selective-lethality.") if len(cap2) else "greedy concentration baseline."
+    def mean_of(meth, col):
+        s = df[df.method == meth][col]
+        return _ci(s)[0] if len(s) else float("nan")
+    cap2 = "selective_cap2" if "selective_cap2" in order else (order[-1] if order else None)
+    headline = (
+        f"Efficacy-only nomination puts {mean_of('efficacy','concentration'):.0%} of the "
+        f"portfolio in one pathway and carries toxicity {mean_of('efficacy','mean_toxicity'):.2f}. "
+        f"The selective+hedged strategy ({cap2}) cuts toxicity to "
+        f"{mean_of(cap2,'mean_toxicity'):.2f} and concentration to "
+        f"{mean_of(cap2,'concentration'):.0%}, while keeping max-efficacy "
+        f"{mean_of(cap2,'max_efficacy'):.2f} vs {mean_of('efficacy','max_efficacy'):.2f} "
+        f"(mean efficacy {mean_of('efficacy','mean_efficacy'):.2f}→{mean_of(cap2,'mean_efficacy'):.2f})."
+    ) if cap2 else "risk-aware nomination."
+
+    # progression table
+    prog_cols = ["mean eff", "max eff", "toxicity↓", "concentration↓", "robustness↑"]
+    prog_keys = ["mean_efficacy", "max_efficacy", "mean_toxicity", "concentration", "robustness"]
+    prog_rows = [{"m": meth, "cells": [f"{mean_of(meth,k):.3f}" for k in prog_keys]}
+                 for meth in order]
+
     metrics = []
-    for col, label, desc in _METRICS:
-        rows = [{"method": m, "cell": f"{_ci(df[df.method==m][col])[0]:.3f} ± {_ci(df[df.method==m][col])[1]:.3f}"} for m in order]
-        metrics.append({"label": label, "desc": desc, "plot": _curve(df, col, label, order), "rows": rows})
-    # per-line breakdown (greedy vs cap2)
-    lines = sorted(df.cell_line.unique())
-    per_line_rows = []
-    for ln in lines:
-        sub = df[df.cell_line == ln]
-        cells = []
-        for meth in ("greedy", "cap2"):
-            s = sub[sub.method == meth]
-            if len(s):
-                cells.append(f"{s.selective_lethality.mean():.2f}/{s.concentration.mean():.2f}/{s.robustness.mean():.2f}")
-            else:
-                cells.append("—")
-        per_line_rows.append({"line": ln, "cells": cells})
+    for col, label, hib, desc in _METRICS:
+        rows = [{"method": m, "cell": f"{_ci(df[df.method==m][col])[0]:.3f} ± {_ci(df[df.method==m][col])[1]:.3f}"}
+                for m in order]
+        metrics.append({"label": label, "desc": desc,
+                        "plot": _curve(df, col, label, order, hib), "rows": rows})
+
     html = Environment(loader=BaseLoader()).from_string(_TEMPLATE).render(
         title=title, n_lines=df.cell_line.nunique(), n_seeds=df.seed.nunique(),
-        K=30, methods=order, headline=headline, pareto_div=_pareto(df, order),
-        metrics=metrics, per_line_cols=["greedy", "cap2"], per_line_rows=per_line_rows)
+        K=K, headline=headline, glossary=_GLOSSARY, scatter_div=_scatter(scatter),
+        lambda_div=_lambda_pareto_div(lambda_pareto),
+        prog_cols=prog_cols, prog_rows=prog_rows, metrics=metrics)
     out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html)
     return out_path
@@ -130,5 +208,9 @@ def build_risk_report(df: pd.DataFrame, out_path, title="geneal — risk-aware t
 if __name__ == "__main__":
     import sys
     df = pd.read_parquet(sys.argv[1])
-    p = build_risk_report(df, sys.argv[2] if len(sys.argv) > 2 else "risk_report.html")
+    sc = None
+    scp = Path(sys.argv[1]).parent / "scatter.parquet"
+    if scp.exists():
+        sc = pd.read_parquet(scp)
+    p = build_risk_report(df, sys.argv[2] if len(sys.argv) > 2 else "risk_report.html", scatter=sc)
     print(f"report -> {p}")
