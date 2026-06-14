@@ -10,10 +10,17 @@
 
 MM      := micromamba run -n geneal
 GE      := data/processed/depmap/gene_effect.parquet
-PANEL   := data/processed/depmap/panel_hvg.txt
-EMB     := data/processed/embeddings/pubmedbert_hvg.parquet
+ALLGENES:= data/processed/depmap/panel_all.txt        # full genome (18.5k entrez)
+PANEL   := data/processed/depmap/panel_hvg.txt         # demo panel (2043) for subsetting
+EMB_ALL := data/processed/embeddings/pubmedbert_all.parquet  # genome-wide cache
+EMB     := data/processed/embeddings/pubmedbert_hvg.parquet  # demo subset
 SEEDS   := 0 1 2 3
 K       := 30
+
+# ARCHITECTURE: embeddings are GENOME-WIDE caches (entrez-indexed). A "panel" is
+# just a row-subset (pass --panel <entrez-file> to experiments). Resizing the
+# panel never re-embeds. Genome-wide caches: pubmedbert_all, esm2_650m_all,
+# scprint (44k native), string_edges_all + corum_*_all. Co-dependency is NOT used.
 
 .PHONY: help test data panel uniprot esm2-emb pubmedbert-emb scprint-emb \
         diagnostics multiline string corum risk risk-large dual all clean-res
@@ -45,16 +52,32 @@ uniprot:
 	$(MM) python scripts/map_genes_to_uniprot.py --entrez-file $(PANEL) \
 	  --out data/processed/depmap/uniprot_map_hvg.parquet
 
-# --- embeddings (GPU auto for ESM2; pinned models) ---
-esm2-emb:
+# --- GENOME-WIDE embedding caches (precompute ONCE; panels subset them) ---
+allgenes:
+	$(MM) python -c "from geneal.data.depmap import load_gene_effect,parse_entrez; ge=load_gene_effect('$(GE)'); open('$(ALLGENES)','w').write(chr(10).join(str(parse_entrez(g)) for g in ge.index))"
+
+uniprot-all:
+	$(MM) python scripts/map_genes_to_uniprot.py --entrez-file $(ALLGENES) \
+	  --out data/processed/depmap/uniprot_map_all.parquet
+
+esm2-all:        ## ESM2-650M, all genes, GPU (long, one-time)
 	$(MM) python scripts/precompute_esm2.py \
-	  --map data/processed/depmap/uniprot_map_hvg.parquet \
-	  --out data/processed/embeddings/esm2_650m_hvg.parquet \
+	  --map data/processed/depmap/uniprot_map_all.parquet \
+	  --out data/processed/embeddings/esm2_650m_all.parquet \
 	  --model esm2_t33_650M_UR50D --batch-size 16
 
-pubmedbert-emb:
-	$(MM) python scripts/embed_pubmedbert.py --panel $(PANEL) \
-	  --out data/processed/embeddings/pubmedbert_hvg.parquet
+pubmedbert-all:  ## PubMedBERT, all genes (one-time)
+	$(MM) python scripts/embed_pubmedbert.py --panel $(ALLGENES) \
+	  --out data/processed/embeddings/pubmedbert_all.parquet \
+	  --text-cache data/processed/depmap/gene_text_all.pkl
+
+graphs-all:      ## STRING + CORUM full edge lists + membership (one-time)
+	$(MM) python scripts/build_graph_caches.py
+
+scprint-emb:
+	@echo "scPRINT needs a SEPARATE env (conflicting torch). See REPRODUCE.md."
+	micromamba run -n scprint python scripts/extract_scprint_gene_emb.py \
+	  --out data/processed/embeddings/scprint_gene_emb_raw.parquet
 
 scprint-emb:
 	@echo "scPRINT needs a SEPARATE env (conflicting torch). See REPRODUCE.md."
@@ -76,9 +99,15 @@ corum:
 	$(MM) python scripts/validate_corum.py
 
 # --- headline experiment: risk-aware nomination ---
+# Uses the genome-wide PubMedBERT cache, subset to a panel via --panel.
 risk:
 	$(MM) python scripts/run_risk_nomination.py --n-cell-lines 12 --seeds $(SEEDS) \
-	  --K $(K) --embeddings $(EMB)
+	  --K $(K) --embeddings $(EMB_ALL) --panel $(PANEL) --out-root res/runs_risk
+
+risk-5k:         ## risk nomination on the 5k panel (genome-wide cache subset)
+	$(MM) python scripts/run_risk_nomination.py --n-cell-lines 12 --seeds $(SEEDS) \
+	  --K $(K) --embeddings $(EMB_ALL) --panel data/processed/depmap/panel_5k.txt \
+	  --out-root res/runs_risk_5k
 
 risk-large:
 	bash scripts/launch_risk_sweep.sh 40 6 8 $(K)

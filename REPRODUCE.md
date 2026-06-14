@@ -15,6 +15,18 @@ artifacts land in `data/` (gitignored); experiment outputs + reports in `res/`
 - **GPU**: ESM2 embedding auto-uses CUDA if present (verified on a B200). Everything
   else is CPU-fine.
 
+## Architecture: genome-wide embedding caches, panel = row-subset
+
+Embeddings are computed **once over all ~18.5k DepMap genes** (Entrez-indexed) and
+cached. A "panel" (e.g. the 2043-gene HVG demo set, or 5116-gene set) is just a
+**row-subset** of a cache — selected at experiment time via `--panel <entrez-file>`.
+**Resizing the panel never re-embeds.** Genome-wide caches:
+`pubmedbert_all.parquet`, `esm2_650m_all.parquet`, scPRINT (44k-gene native weight),
+and STRING/CORUM edge-list + membership tables. **Co-dependency is NOT used** (it is
+label-adjacent — derived from the effect matrix — so not a deployable prior; it was
+only a diagnostic probe). Build all caches with `make pubmedbert-all esm2-all graphs-all`;
+demo subsets (`pubmedbert_hvg` etc.) are kept for quick runs.
+
 ## Pipeline order
 
 | stage | make target | script | output |

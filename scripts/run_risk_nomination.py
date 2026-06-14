@@ -28,21 +28,35 @@ def gene_symbol(label: str) -> str:
     return (m.group(1) if m else label).strip()
 
 
-def corum_membership(gene_names, corum_path="data/corum_dl/humanComplexes.txt"):
-    """gene_idx -> set of CORUM complex_ids the gene belongs to (matched by symbol)."""
+def corum_membership(gene_names,
+                     cache="data/processed/depmap/corum_membership_all.parquet",
+                     corum_path="data/corum_dl/humanComplexes.txt"):
+    """gene_idx -> set of CORUM complex_ids. Prefers the genome-wide membership
+    cache (entrez->complex_id, built by build_graph_caches.py); falls back to
+    parsing the raw CORUM file by gene symbol."""
+    from pathlib import Path
+    ent2complexes: dict = {}
+    if Path(cache).exists():
+        mdf = pd.read_parquet(cache)
+        for ent, cid in zip(mdf["entrez"], mdf["complex_id"]):
+            ent2complexes.setdefault(int(ent), set()).add(int(cid))
+        return {i: ent2complexes.get(int(_entrez(lab)), set())
+                for i, lab in enumerate(gene_names)}
+    # fallback: parse raw CORUM by symbol
     df = pd.read_csv(corum_path, sep="\t")
     sym2complexes: dict = {}
     for _, r in df.iterrows():
         cid = int(r["complex_id"])
-        subs = str(r.get("subunits_gene_name", "") or "")
-        for s in re.split(r"[;,]", subs):
-            s = s.strip()
-            if s:
-                sym2complexes.setdefault(s, set()).add(cid)
-    membership = {}
-    for i, lab in enumerate(gene_names):
-        membership[i] = sym2complexes.get(gene_symbol(lab), set())
-    return membership
+        for s in re.split(r"[;,]", str(r.get("subunits_gene_name", "") or "")):
+            if s.strip():
+                sym2complexes.setdefault(s.strip(), set()).add(cid)
+    return {i: sym2complexes.get(gene_symbol(lab), set())
+            for i, lab in enumerate(gene_names)}
+
+
+def _entrez(label):
+    from geneal.data.depmap import parse_entrez
+    return parse_entrez(label)
 
 
 def _mean_ci(x):
@@ -133,7 +147,10 @@ def tau_frontier(ge, emb, cl, K, n_init, taus, thresh, seed):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gene-effect", default="data/processed/depmap/gene_effect.parquet")
-    ap.add_argument("--embeddings", default="data/processed/embeddings/pubmedbert_hvg.parquet")
+    ap.add_argument("--embeddings", default="data/processed/embeddings/pubmedbert_hvg.parquet",
+                    help="embedding parquet (may be a genome-wide cache; use --panel to subset)")
+    ap.add_argument("--panel", default=None,
+                    help="optional entrez-id file to subset a genome-wide embedding to a panel")
     ap.add_argument("--n-cell-lines", type=int, default=4)
     ap.add_argument("--K", type=int, default=30)
     ap.add_argument("--n-initial", type=int, default=60)
@@ -154,6 +171,10 @@ def main():
 
     ge = load_gene_effect(args.gene_effect)
     emb = pd.read_parquet(args.embeddings)
+    if args.panel:   # subset a genome-wide embedding cache to a panel (entrez file)
+        keep = set(int(x) for x in Path(args.panel).read_text().split())
+        emb = emb[emb.index.isin(keep)]
+        print(f"subset embedding to panel: {len(emb)} genes")
     embset = set(emb.index)
     labs = [g for g in ge.index if parse_entrez(g) in embset]
     if args.cell_lines:
