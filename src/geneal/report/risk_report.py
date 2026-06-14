@@ -33,10 +33,10 @@ _METRICS = [
 
 _GLOSSARY = """
 <b>Strategies</b><br>
-&bull; <b>efficacy</b> — pick the K targets with highest predicted lethality, ignoring toxicity and pathway. The naive baseline (&ldquo;maximize efficacy, check safety later&rdquo;).<br>
-&bull; <b>selective</b> — pick K maximizing lethality MINUS a common-essential toxicity penalty (joint efficacy+safety optimization).<br>
-&bull; <b>selective_cap&lt;c&gt;</b> — selective, but allow at most <b>c</b> genes per pathway/complex (e.g. cap2 = max 2 per pathway). The portfolio hedge against pathway-level toxicity/failure.<br><br>
-<b>Why hedge?</b> If you nominate many targets in one pathway and that pathway proves toxic in normal tissue (or undruggable), the whole bet fails together. Capping spreads the bet across independent mechanisms.
+&bull; <b>efficacy</b> — pick the K targets with highest predicted lethality, NO safety constraint. The naive baseline (&ldquo;maximize efficacy, check safety later&rdquo;).<br>
+&bull; <b>constrained</b> — maximize predicted lethality SUBJECT TO toxicity ≤ τ (a hard safety ceiling). Toxicity = common-essential score (known pan-cancer annotation); efficacy in this line is predicted.<br>
+&bull; <b>constrained_cap&lt;c&gt;</b> — constrained, but allow at most <b>c</b> genes per pathway/complex (e.g. cap2 = max 2 per pathway). Adds the portfolio hedge.<br><br>
+<b>Why a constraint, not a weighted penalty?</b> Safety is usually a bar, not a tradeable quantity — a too-toxic target is disqualified. <b>Why also hedge pathways?</b> If many targets sit in one pathway and it proves toxic/undruggable, the whole bet fails together; capping spreads it across independent mechanisms.
 """
 
 
@@ -47,8 +47,8 @@ def _ci(x):
 
 def _order(df):
     caps = sorted({int(m.split("cap")[1]) for m in df.method.unique() if "cap" in m})
-    return [x for x in (["efficacy", "selective"] +
-            [f"selective_cap{c}" for c in caps]) if x in set(df.method)]
+    return [x for x in (["efficacy", "constrained"] +
+            [f"constrained_cap{c}" for c in caps]) if x in set(df.method)]
 
 
 def _curve(df, col, label, order, higher_better):
@@ -125,10 +125,10 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <div class="card">{{ scatter_div|safe }}</div>
 {% endif %}
 
-{% if lambda_div %}
-<h2>Efficacy–toxicity frontier (λ sweep)</h2>
-<div class="note">λ is the efficacy↔toxicity weight in the objective: target = lethality − λ·toxicity. λ=0 is pure efficacy; raising λ buys safety (lower toxicity) at the cost of potency. The shape shows the real tension — the most lethal knockouts are often pan-essential (toxic).</div>
-<div class="card">{{ lambda_div|safe }}</div>
+{% if tau_div %}
+<h2>Constrained efficacy–toxicity frontier (τ sweep)</h2>
+<div class="note">τ is the safety ceiling: nominees must have toxicity ≤ τ. τ=1 admits everything (pure efficacy); tightening τ buys safety at the cost of potency. The shape shows the real tension — the most lethal knockouts are often pan-essential (toxic), so a tight ceiling forces lower efficacy.</div>
+<div class="card">{{ tau_div|safe }}</div>
 {% endif %}
 
 <h2>Strategy progression (efficacy → +safety → +pathway-hedge)</h2>
@@ -148,24 +148,24 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 </body></html>"""
 
 
-def _lambda_pareto_div(lp):
-    """Efficacy-vs-toxicity frontier over the toxicity-penalty weight lambda."""
+def _tau_frontier_div(lp):
+    """Constrained efficacy-vs-toxicity frontier over the safety ceiling tau."""
     if lp is None or len(lp) == 0:
         return None
-    agg = lp.groupby("lam").agg(eff=("mean_efficacy", "mean"),
-                                tox=("mean_toxicity", "mean")).reset_index().sort_values("lam")
+    agg = lp.groupby("tau").agg(eff=("mean_efficacy", "mean"),
+                                tox=("mean_toxicity", "mean")).reset_index().sort_values("tau")
     fig = go.Figure(go.Scatter(x=agg["tox"], y=agg["eff"], mode="lines+markers+text",
-                    text=[f"λ={l:g}" for l in agg["lam"]], textposition="top right",
+                    text=[f"τ={t:g}" for t in agg["tau"]], textposition="top right",
                     marker=dict(size=11)))
     fig.update_layout(template="simple_white",
-                      xaxis_title="mean toxicity (common-essential)  (↓ safer)",
+                      xaxis_title="mean toxicity of nominees (common-essential)  (↓ safer)",
                       yaxis_title="mean efficacy (lethality)  (↑ more potent)",
                       height=440, margin=dict(l=60, r=20, t=10, b=50),
-                      title="Efficacy–toxicity frontier: raising λ trades potency for safety")
+                      title="Constrained frontier: tightening the safety ceiling τ trades potency for safety")
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
-def build_risk_report(df: pd.DataFrame, out_path, scatter=None, lambda_pareto=None,
+def build_risk_report(df: pd.DataFrame, out_path, scatter=None, tau_frontier=None,
                       K=30, title="geneal — risk-aware target nomination") -> Path:
     order = _order(df)
     def mean_of(meth, col):
@@ -198,7 +198,7 @@ def build_risk_report(df: pd.DataFrame, out_path, scatter=None, lambda_pareto=No
     html = Environment(loader=BaseLoader()).from_string(_TEMPLATE).render(
         title=title, n_lines=df.cell_line.nunique(), n_seeds=df.seed.nunique(),
         K=K, headline=headline, glossary=_GLOSSARY, scatter_div=_scatter(scatter),
-        lambda_div=_lambda_pareto_div(lambda_pareto),
+        tau_div=_tau_frontier_div(tau_frontier),
         prog_cols=prog_cols, prog_rows=prog_rows, metrics=metrics)
     out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html)
@@ -208,9 +208,9 @@ def build_risk_report(df: pd.DataFrame, out_path, scatter=None, lambda_pareto=No
 if __name__ == "__main__":
     import sys
     df = pd.read_parquet(sys.argv[1])
-    sc = None
-    scp = Path(sys.argv[1]).parent / "scatter.parquet"
-    if scp.exists():
-        sc = pd.read_parquet(scp)
-    p = build_risk_report(df, sys.argv[2] if len(sys.argv) > 2 else "risk_report.html", scatter=sc)
+    base = Path(sys.argv[1]).parent
+    sc = pd.read_parquet(base / "scatter.parquet") if (base / "scatter.parquet").exists() else None
+    tf = pd.read_parquet(base / "tau_frontier.parquet") if (base / "tau_frontier.parquet").exists() else None
+    p = build_risk_report(df, sys.argv[2] if len(sys.argv) > 2 else "risk_report.html",
+                          scatter=sc, tau_frontier=tf)
     print(f"report -> {p}")
