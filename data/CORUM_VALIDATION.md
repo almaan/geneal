@@ -105,3 +105,21 @@ property that makes a similarity yield a tunable quality-diversity tradeoff (let
 clustering within it) IS the perturbational property no identity/function representation has.
 9 similarity sources/forms tested; all fail for this one root reason. This is intrinsic,
 not a graph-choice or binary-vs-continuous detail.
+
+## β-tradeoff wall confirmed across 6 cell lines (2026-06-13)
+
+Continuous STRING-S, q=UCB, K=30, β∈{1,4,16}, 6 lines:
+  ACH-000147 greedy 1.19/6c -> kdpp 0.69-0.75/29-30c
+  ACH-000881 greedy 1.26/12c -> 0.84/30c
+  ACH-000696 greedy 0.90/15c -> 0.90/30c   (FREE diversity: same lethality!)
+  ACH-000651 greedy 0.97/5c -> 0.68/30c
+  ACH-000219 greedy 1.15/6c -> 0.87/30c
+  ACH-000971 greedy 0.90/9c -> 0.77/30c
+
+β inert on ALL 6 lines (no tunable frontier) — wall is universal, not a 2-line
+artifact. SECONDARY finding: the LETHALITY COST of full mechanism-diversity is
+cell-line-dependent — free on ACH-000696 (15->30 mechanisms at identical 0.90
+lethality), but costs 0.2-0.5 lethality on the other 5 (greedy finds lethal genes
+concentrated in few mechanisms; spreading sacrifices potency). So 'mechanism-diverse
+portfolio at no efficacy cost' is achievable only on some cell lines, determined by
+whether that line's lethal genes are mechanistically concentrated or spread.
