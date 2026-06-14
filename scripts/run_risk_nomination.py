@@ -93,14 +93,22 @@ def main():
     ap.add_argument("--lam", type=float, default=1.0)
     ap.add_argument("--thresh", type=float, default=-0.5)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1])
+    ap.add_argument("--cell-lines", type=str, nargs="+", default=None,
+                    help="explicit ModelIDs to run (overrides --n-cell-lines); "
+                         "used by the sharded launcher")
     ap.add_argument("--out-root", default="res/runs_risk")
+    ap.add_argument("--run-name", default=None,
+                    help="output subdir name (default = timestamp)")
     args = ap.parse_args()
 
     ge = load_gene_effect(args.gene_effect)
     emb = pd.read_parquet(args.embeddings)
     embset = set(emb.index)
     labs = [g for g in ge.index if parse_entrez(g) in embset]
-    lines = ge.loc[labs].isna().sum(0).sort_values().index[:args.n_cell_lines].tolist()
+    if args.cell_lines:
+        lines = list(args.cell_lines)
+    else:
+        lines = ge.loc[labs].isna().sum(0).sort_values().index[:args.n_cell_lines].tolist()
     print("cell lines:", lines)
 
     all_rows = []
@@ -109,9 +117,16 @@ def main():
             all_rows += run_line(ge, emb, cl, None, args.K, args.n_initial,
                                  args.caps, args.lam, args.thresh, sd)
     df = pd.DataFrame(all_rows)
-    run = pd.Timestamp.now().strftime("%Y%m%d-%H%M%S")
+    run = args.run_name or pd.Timestamp.now().strftime("%Y%m%d-%H%M%S")
     out = Path(args.out_root) / run; out.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out / "risk.parquet")
+    # detailed HTML report
+    try:
+        from geneal.report.risk_report import build_risk_report
+        build_risk_report(df, out / "report.html")
+        print(f"report -> {out / 'report.html'}")
+    except Exception as e:
+        print("report skipped:", e)
 
     order = ["greedy"] + [f"cap{c}" for c in args.caps]
     print(f"\n=== aggregate over {len(lines)} lines x {len(args.seeds)} seeds (mean +/- 95%% CI) ===")
