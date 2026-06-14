@@ -86,26 +86,15 @@ n_lines = df["cell_line"].nunique(); n_seeds = df["seed"].nunique()
 def ci(x):
     x=np.asarray(x,float); n=len(x); m=float(x.mean())
     return m, (0.0 if n<2 else 1.96*float(x.std(ddof=1))/np.sqrt(n))
-caps=sorted({int(m[3:]) for m in df.method.unique() if m.startswith('cap')})
-order=["greedy"]+[f"cap{c}" for c in caps]
+caps=sorted({int(m.split('cap')[1]) for m in df.method.unique() if 'cap' in m})
+order=[m for m in (["efficacy","constrained"]+[f"constrained_cap{c}" for c in caps]) if m in set(df.method)]
+metrics=[c for c in ["mean_efficacy","max_efficacy","mean_toxicity","concentration","robustness"] if c in df.columns]
 print(f"\n=== COMBINED: {n_lines} lines x {n_seeds} seeds (mean +/- 95% CI) ===")
-for met in ["selective_lethality","concentration","robustness"]:
+for met in metrics:
     print(f"\n[{met}]")
     for meth in order:
-        mn,c=ci(df[df.method==meth][met]); print(f"  {meth:8s} {mn:.3f} +/- {c:.3f}")
-try:
-    import plotly.graph_objects as go
-    agg=df.groupby("method").agg(leth=("selective_lethality","mean"),
-        conc=("concentration","mean")).reindex(order)
-    fig=go.Figure(go.Scatter(x=agg["conc"],y=agg["leth"],mode="markers+text",
-        text=agg.index,textposition="top center",marker=dict(size=12)))
-    fig.update_layout(template="simple_white",
-        xaxis_title="pathway concentration (RISK)",yaxis_title="selective lethality (efficacy)",
-        title=f"Efficacy-risk frontier ({n_lines} lines x {n_seeds} seeds)")
-    fig.write_html(f"{root}/pareto.html")
-    print(f"\nfigure -> {root}/pareto.html")
-except Exception as e:
-    print("figure skipped:", e)
+        s=df[df.method==meth][met]
+        if len(s): mn,c=ci(s); print(f"  {meth:18s} {mn:.3f} +/- {c:.3f}")
 # detailed combined report
 try:
     from geneal.report.risk_report import build_risk_report
