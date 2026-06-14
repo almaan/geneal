@@ -9,15 +9,11 @@
 
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\E}{\mathbb{E}}
-\newcommand{\Var}{\operatorname{Var}}
-\newcommand{\Cov}{\operatorname{Cov}}
-\newcommand{\eff}{\mathrm{eff}}
-\newcommand{\tox}{\mathrm{tox}}
 \DeclareMathOperator*{\argmax}{arg\,max}
 \DeclareMathOperator*{\argmin}{arg\,min}
 
 \title{\textbf{geneal}: Active Learning for Risk-Aware Knockout Target Nomination\\
-\large Method}
+\large A Step-by-Step Method Tutorial}
 \author{}
 \date{}
 
@@ -25,225 +21,363 @@
 \maketitle
 
 \begin{abstract}
-We describe an active-learning framework for nominating gene-knockout targets that
-are simultaneously \emph{efficacious} (lethal in a cancer cell line), \emph{safe}
-(not broadly essential / not lethal in a reference context), and \emph{mechanistically
-diversified} (not concentrated in a single pathway). The method couples Gaussian-process
-surrogates over a fixed gene representation, principled acquisition functions
-(upper-confidence-bound, determinantal batch selection, and expected hypervolume
-improvement for the multi-objective case), a constrained nomination rule that treats
-safety as a hard ceiling, and a portfolio hedge that bounds per-pathway exposure to
-guard against pathway-level failure. We give the mathematical grounding and rationale
-for each step. Data acquisition and representation are out of scope here.
+This document explains, from the ground up, an active-learning method for choosing
+which gene knockouts to test next so that we efficiently find targets that are
+\emph{effective} (kill the cancer cell), \emph{safe} (do not kill normal cells), and
+\emph{mechanistically diverse} (spread across biological pathways so we are not betting
+everything on one mechanism). It is written for a reader new to active learning: every
+equation is followed by a plain-language reading of what each symbol and term means and
+how to interpret it. Data collection and gene representation are out of scope.
 \end{abstract}
 
-\section{Problem setup and notation}
-Let $\mathcal{G}=\{1,\dots,N\}$ index candidate genes, each with a fixed feature vector
-(embedding) $x_i\in\R^d$. For a chosen cell line we define the \emph{efficacy} of
-knocking out gene $i$ as the lethality $e_i = -\,\mathrm{effect}_i$, where
-$\mathrm{effect}_i$ is the (Chronos) gene-effect score; more negative effect $\Rightarrow$
-higher lethality $\Rightarrow$ higher efficacy. We also define a \emph{toxicity}
-$t_i\ge 0$ that measures undesired lethality in non-target contexts (\S\ref{sec:tox}).
-The goal is to select a batch (portfolio) $B\subset\mathcal{G}$, $|B|=K$, that has high
-efficacy and low toxicity while being spread across biological pathways.
+\tableofcontents
 
-Active learning proceeds in rounds. At each round we have a \emph{revealed} set
-$D\subset\mathcal{G}$ of genes whose labels (efficacy, and toxicity when unknown) have
-been assayed; we fit surrogate models on $D$, score the unrevealed candidates with an
-acquisition function, acquire a batch of $q$ new genes, and repeat. All randomness uses
-explicit, seeded generators so runs are reproducible, and competing methods share the
-same initial set and noise draws (\emph{common random numbers}) for paired comparison.
+\section{What problem are we solving, and what is active learning?}
 
-\section{Gaussian-process surrogate}
-We model each scalar objective $y\in\{e,t\}$ as a draw from a Gaussian process,
-\begin{equation}
-y(x)\sim\mathcal{GP}\big(m(x),\,k(x,x')\big),
-\end{equation}
-with constant mean $m$ and a Mat\'ern kernel (smoothness $\nu=5/2$) with a scale
-factor,
-\begin{equation}
-k(x,x') = \theta\Big(1+\tfrac{\sqrt{5}r}{\ell}+\tfrac{5r^2}{3\ell^2}\Big)\exp\!\Big(-\tfrac{\sqrt5 r}{\ell}\Big),\qquad r=\lVert x-x'\rVert .
-\end{equation}
-\emph{Why a GP.} Active learning needs \emph{calibrated uncertainty}, not just point
-predictions: the acquisition functions below trade off exploiting high predicted values
-against exploring uncertain regions. A GP gives a closed-form posterior with both a mean
-and a variance. The Mat\'ern-$5/2$ kernel is a standard, mildly smooth default that does
-not assume the infinite differentiability of the RBF kernel.
+We have a large list of candidate genes. For a given cancer cell line, knocking out a
+gene has some effect on the cell's survival; a strongly negative effect means the cell
+dies, which is what we want for a cancer target. Measuring this for every gene is
+expensive, so we cannot test them all. We want to test a small number, in batches, and
+learn as we go which genes are worth testing next.
 
-Given revealed inputs $X_D$ and noisy labels $\mathbf{y}_D$ (observation noise
-$\sigma_n^2$), the posterior at a test point $x_\ast$ is Gaussian with
-\begin{align}
-\mu(x_\ast) &= k_\ast^\top (K+\sigma_n^2 I)^{-1}\mathbf{y}_D,\\
-\sigma^2(x_\ast) &= k(x_\ast,x_\ast) - k_\ast^\top (K+\sigma_n^2 I)^{-1} k_\ast,
-\end{align}
-where $K_{ij}=k(x_i,x_j)$ and $(k_\ast)_i=k(x_i,x_\ast)$. For a set of test points we
-similarly obtain a joint posterior mean vector and covariance matrix $\Sigma_\ast$.
-Kernel hyperparameters $(\theta,\ell,\sigma_n)$ are fit by maximizing the exact log
-marginal likelihood
-\begin{equation}
-\log p(\mathbf{y}_D\mid X_D)= -\tfrac12 \mathbf{y}_D^\top(K+\sigma_n^2 I)^{-1}\mathbf{y}_D
--\tfrac12\log\lvert K+\sigma_n^2 I\rvert -\tfrac{n}{2}\log 2\pi .
-\end{equation}
-Inputs and targets are standardized before fitting; predictions are returned on the
-original scale. For multi-objective problems we fit one independent GP per objective.
+\paragraph{Active learning (AL), in one sentence.} Instead of choosing what to measure
+all at once or at random, we build a predictive model from the measurements we already
+have, use it to decide which \emph{unmeasured} genes are most worth measuring next,
+measure those, update the model, and repeat. The aim is to reach a good answer with as
+few measurements as possible.
 
-\section{Single-objective acquisition}
-Given the posterior $(\mu,\sigma)$ over candidates and the best revealed value $y^+$, we
-use standard acquisitions:
-\begin{align}
-\text{UCB:}\quad & a_{\mathrm{UCB}}(x)=\mu(x)+\beta\,\sigma(x),\\
-\text{EI:}\quad & a_{\mathrm{EI}}(x)=(\mu(x)-y^+)\,\Phi(z)+\sigma(x)\,\phi(z),\quad z=\tfrac{\mu(x)-y^+}{\sigma(x)},
-\end{align}
-with $\Phi,\phi$ the standard normal CDF/PDF. \emph{Why.} UCB makes the
-explore--exploit trade-off explicit through $\beta$; EI is the expected positive
-improvement over the incumbent. Both are maximized (higher score $=$ more desirable).
-
-\section{Diversified batch selection}
-When a round acquires $q>1$ genes, taking the top-$q$ by acquisition score can return a
-redundant batch. We consider two diversification mechanisms.
-
-\subsection{Quality-weighted $k$-DPP}
-A determinantal point process (DPP) over candidates with an $L$-ensemble kernel
-$L\in\R^{N\times N}$ assigns a subset $B$ probability
-\begin{equation}
-\Pr(B)\;\propto\;\det\!\big(L_B\big),
-\end{equation}
-where $L_B$ is the principal submatrix indexed by $B$. We set
-\begin{equation}
-L_{ij}=q_i\,S_{ij}\,q_j,\qquad q_i=a(x_i)\ \text{(quality, e.g.\ UCB)},\quad
-S_{ij}=\frac{\Sigma_{\ast,ij}}{\sqrt{\Sigma_{\ast,ii}\Sigma_{\ast,jj}}}\ \text{(outcome correlation)} .
-\end{equation}
-$\det(L_B)$ is large when the chosen genes are both high quality (large diagonal
-$q_i^2$) and mutually dissimilar (near-orthogonal rows, small off-diagonal $S$).
-\emph{Why this is principled.} For a Gaussian, $\tfrac12\log\det(\text{covariance})$ is
-the differential entropy; maximizing $\log\det L_B$ therefore maximizes the joint
-information content of the batch. So a quality-weighted $k$-DPP is simultaneously an
-information-theoretic and a quality$\times$diversity objective. Exact selection of the
-size-$q$ maximizer is NP-hard; we use the greedy MAP rule, which adds at each step the
-candidate with the largest marginal gain in $\log\det$ and admits an $O(q^2N)$
-incremental Cholesky update.
-
-\subsection{Hard per-pathway cap}
-In practice (genome-scale candidate pools) the similarity $S$ is too sparse to create a
-tunable trade-off, and a simpler, interpretable hedge is preferred: cap the number of
-selected genes per pathway. Given a pathway membership map
-$\pi:\mathcal{G}\to 2^{\mathcal{P}}$ (gene $\to$ set of complexes/pathways) and a cap
-$c$, we greedily take genes in decreasing quality order, admitting gene $i$ only if no
-pathway $p\in\pi(i)$ has already reached $c$ selected members. \emph{Why.} This directly
-bounds per-pathway exposure (\S\ref{sec:risk}) with a single, meaningful knob, and is
-robust to sparse similarity structure.
-
-\section{Toxicity and the selectivity objective}\label{sec:tox}
-We instantiate toxicity in one of three ways:
-\begin{enumerate}[leftmargin=2em,itemsep=2pt]
-\item \textbf{Common-essential (a priori).} $c_i=\tfrac{1}{L}\sum_{\ell=1}^{L}\mathbf{1}[\mathrm{effect}_{i,\ell}<\tau_e]$, the fraction of all $L$ cell lines in which knocking out gene $i$ is strongly lethal. Pan-essential genes (high $c_i$) would also kill normal tissue and are the toxicity proxy. This quantity is known prior knowledge from existing screens.
-\item \textbf{Contrast line.} $t_i = -\,\mathrm{effect}_{i,B}$, the lethality in a fixed, different-domain reference cell line $B$ (a stand-in for normal tissue). Treated as \emph{unknown} and learned by a second GP.
-\item \textbf{Population.} $t_i = -\,\tfrac1L\sum_\ell \mathrm{effect}_{i,\ell}$, mean lethality across the population. Also learned.
+\paragraph{The loop.} One ``round'' of active learning is:
+\begin{enumerate}[leftmargin=2em,itemsep=1pt]
+\item Fit a model on the genes measured so far.
+\item Score every not-yet-measured gene by how useful it would be to measure (the
+\emph{acquisition function}).
+\item Pick the top batch of $q$ genes, measure them, add them to the measured set.
+\item Repeat.
 \end{enumerate}
-A simple scalarized \emph{selective lethality} is $s_i = e_i-\lambda\,t_i$. However, treating
-safety as a freely tradeable penalty is unsatisfying (a too-toxic target should be
-disqualified, not merely down-weighted), and $\lambda$ has no natural units. We therefore
-prefer the constrained formulation below.
 
-\section{Constrained nomination}
-We maximize predicted efficacy subject to a hard safety ceiling $\tau$:
+\paragraph{Notation we will use throughout.}
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item $\mathcal{G}=\{1,\dots,N\}$: the candidate genes. $N$ is the total number.
+\item $x_i \in \R^d$: a fixed numeric ``fingerprint'' (embedding) of gene $i$, a vector of
+$d$ numbers. Genes with similar biology have similar $x_i$.
+\item $e_i$: the \emph{efficacy} of knocking out gene $i$ $=$ how lethal it is to the
+cancer cell. Higher $=$ better target.
+\item $t_i$: the \emph{toxicity} $=$ how lethal the knockout is in contexts we want to
+spare (normal-like cells). Higher $=$ worse / more dangerous.
+\item $D \subset \mathcal{G}$: the set of genes already measured (``revealed'').
+\item $B \subset \mathcal{G}$, $|B|=K$: the final shortlist (``portfolio'') of nominated targets.
+\end{itemize}
+Everything random uses a fixed seed, so a run can be reproduced exactly, and any two
+methods we compare start from the same initial measurements (this is called using
+\emph{common random numbers}, and it makes the comparison fair).
+
+\section{Step 1: the surrogate model (a Gaussian process)}
+
+\paragraph{Why we need it.} To decide what to measure next we need a model that, from the
+genes measured so far, predicts the efficacy of any unmeasured gene \emph{and} tells us
+how confident it is. That confidence is essential: a gene we are unsure about may be
+worth measuring precisely because measuring it teaches us a lot. A Gaussian process (GP)
+is a model that outputs exactly this: for any gene, a predicted value \emph{and} an
+uncertainty.
+
+\paragraph{The idea.} A GP assumes that genes with similar fingerprints $x$ tend to have
+similar efficacy, and it quantifies ``similar'' with a \emph{kernel} function $k(x,x')$ ---
+a similarity score between two genes. We write
 \begin{equation}
-B^\star=\argmax_{|B|=K}\ \sum_{i\in B}\hat e_i \quad\text{s.t.}\quad \hat t_i\le\tau\ \ \forall i\in B,
+y(x)\sim\mathcal{GP}\big(m(x),\,k(x,x')\big).
+\end{equation}
+\textbf{How to read this:} ``the unknown function $y(\cdot)$ mapping a gene's fingerprint
+to its efficacy is modeled as a Gaussian process with a baseline level $m(x)$ (a constant
+we fit) and a similarity rule $k(x,x')$.'' The GP is a distribution over \emph{functions}:
+before seeing data it represents all plausible efficacy-vs-fingerprint curves; after seeing
+data it narrows to those consistent with the measurements.
+
+\paragraph{The kernel (similarity rule).} We use the Mat\'ern-$5/2$ kernel:
+\begin{equation}
+k(x,x') = \theta\Big(1+\tfrac{\sqrt{5}\,r}{\ell}+\tfrac{5\,r^2}{3\ell^2}\Big)\exp\!\Big(-\tfrac{\sqrt5\, r}{\ell}\Big),\qquad r=\lVert x-x'\rVert .
+\end{equation}
+\textbf{Reading it term by term:}
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item $r=\lVert x-x'\rVert$ is the distance between the two genes' fingerprints. Small $r$
+$=$ similar genes.
+\item The $\exp(-\sqrt5\,r/\ell)$ factor makes similarity \emph{decay with distance}: far-apart
+genes are nearly unrelated. So a measurement of one gene informs predictions mostly for
+nearby genes.
+\item $\ell$ (the ``length scale'') sets \emph{how fast} that decay happens --- how far the
+influence of a measurement reaches. Large $\ell$ $=$ smooth, long-range sharing; small
+$\ell$ $=$ only very close genes share information.
+\item $\theta$ scales the overall variance --- how much efficacy varies across genes.
+\item The polynomial $(1+\dots)$ makes the function ``mildly smooth'' (Mat\'ern-$5/2$): smoother
+than a jagged model, but not as unrealistically smooth as the common ``RBF'' kernel.
+\end{itemize}
+We learn $\theta,\ell$ (and a noise level, below) automatically from the data.
+
+\paragraph{What the GP gives you: prediction $+$ uncertainty.} After measuring genes
+$X_D$ with (noisy) efficacy values $\mathbf{y}_D$, the GP's prediction for a new gene
+$x_\ast$ is a Gaussian with mean $\mu(x_\ast)$ and variance $\sigma^2(x_\ast)$:
+\begin{align}
+\mu(x_\ast) &= k_\ast^\top (K+\sigma_n^2 I)^{-1}\,\mathbf{y}_D, \label{eq:gpmean}\\
+\sigma^2(x_\ast) &= \underbrace{k(x_\ast,x_\ast)}_{\text{prior uncertainty}} - \underbrace{k_\ast^\top (K+\sigma_n^2 I)^{-1} k_\ast}_{\text{uncertainty removed by data}}. \label{eq:gpvar}
+\end{align}
+\textbf{How to read \eqref{eq:gpmean} (the prediction):}
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item $k_\ast$ is the vector of similarities between the new gene $x_\ast$ and each measured
+gene. $(k_\ast)_i=k(x_i,x_\ast)$.
+\item $K$ is the matrix of similarities \emph{among} the measured genes, $K_{ij}=k(x_i,x_j)$.
+\item $\sigma_n^2$ is the measurement-noise level (assays are imperfect); $I$ is the identity.
+\item In words: the prediction is a \emph{weighted average of the measured efficacies}
+$\mathbf{y}_D$, where measured genes more similar to $x_\ast$ get more weight (through
+$k_\ast$), after correcting for redundancy among the measured genes (the $(K+\sigma_n^2 I)^{-1}$).
+\end{itemize}
+\textbf{How to read \eqref{eq:gpvar} (the uncertainty):} it starts at the prior uncertainty
+$k(x_\ast,x_\ast)$ and \emph{subtracts} how much the existing measurements pin down $x_\ast$.
+So the variance is small (we are confident) for genes near where we have measured, and
+large (we are unsure) for genes in unexplored regions. This is the quantity active learning
+exploits to decide where to explore.
+
+\paragraph{Fitting the kernel.} We choose $(\theta,\ell,\sigma_n)$ to maximize the
+\emph{log marginal likelihood},
+\begin{equation}
+\log p(\mathbf{y}_D\mid X_D)= \underbrace{-\tfrac12 \mathbf{y}_D^\top(K+\sigma_n^2 I)^{-1}\mathbf{y}_D}_{\text{fits the data}}
+\ \underbrace{-\tfrac12\log\lvert K+\sigma_n^2 I\rvert}_{\text{penalizes complexity}}\ -\tfrac{n}{2}\log 2\pi .
+\end{equation}
+\textbf{Reading it:} the first term rewards kernels that explain the measured values well;
+the second term penalizes overly flexible kernels (Occam's razor, automatically balancing
+fit against simplicity). The last term is a constant. Maximizing this picks the
+similarity rule best supported by the data. When we later need two unknowns (efficacy and
+toxicity) we simply fit one independent GP for each.
+
+\section{Step 2: scoring genes to measure (single-objective acquisition)}
+
+The \emph{acquisition function} turns the GP's prediction and uncertainty into a single
+``how worth measuring is this gene'' score. Two standard choices:
+
+\paragraph{Upper Confidence Bound (UCB).}
+\begin{equation}
+a_{\mathrm{UCB}}(x)=\underbrace{\mu(x)}_{\text{exploit}}+\beta\underbrace{\sigma(x)}_{\text{explore}} .
+\end{equation}
+\textbf{Reading it:} score a gene by its predicted efficacy $\mu$ \emph{plus} a bonus for
+uncertainty $\sigma$. The first term ``exploits'' (favors genes we think are good); the
+second ``explores'' (favors genes we are unsure about, which could be good and would teach
+us a lot). $\beta\ge 0$ is the knob that sets the balance: $\beta=0$ is pure greed,
+large $\beta$ is aggressive exploration. We maximize this score.
+
+\paragraph{Expected Improvement (EI).}
+\begin{equation}
+a_{\mathrm{EI}}(x)=(\mu(x)-y^+)\,\Phi(z)+\sigma(x)\,\phi(z),\qquad z=\frac{\mu(x)-y^+}{\sigma(x)} .
+\end{equation}
+\textbf{Reading it:} $y^+$ is the best efficacy we have measured so far (the ``incumbent'').
+$z$ measures how many standard deviations the gene's predicted value sits above that
+incumbent. $\Phi$ and $\phi$ are the standard normal CDF and PDF. The whole expression is
+the \emph{expected amount by which this gene would beat the current best}, accounting for
+uncertainty: it is large either when the mean clearly beats $y^+$, or when the gene is
+uncertain enough to plausibly beat it. Higher $=$ more worth measuring.
+
+\section{Step 3: choosing a non-redundant batch}
+
+We measure $q>1$ genes per round. Naively taking the top-$q$ by acquisition score can give
+$q$ near-duplicate genes (same pathway, near-identical fingerprints) --- wasteful, because
+once you have measured one you learn little extra from its twins. We want a batch that is
+high quality \emph{and} varied.
+
+\subsection{Determinantal point process ($k$-DPP) --- diversity from a determinant}
+
+A determinantal point process gives each candidate subset $B$ a ``score'' equal to the
+determinant of a small matrix built from $B$:
+\begin{equation}
+\text{score}(B)\;=\;\det\!\big(L_B\big),\qquad L_{ij}=\underbrace{q_i}_{\text{quality of }i}\ \underbrace{S_{ij}}_{\text{similarity }i,j}\ \underbrace{q_j}_{\text{quality of }j} .
+\end{equation}
+\textbf{Reading the pieces:}
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item $q_i$ is the \emph{quality} of gene $i$ --- e.g.\ its UCB score. It appears on both sides,
+so the diagonal of $L$ is $q_i^2$: high-quality genes have large diagonal entries.
+\item $S_{ij}\in[-1,1]$ is the \emph{similarity} between genes $i$ and $j$ in outcome space,
+$S_{ij}=\Sigma_{ij}/\sqrt{\Sigma_{ii}\Sigma_{jj}}$, the correlation from the GP's joint
+posterior covariance $\Sigma$. $S_{ij}\approx 1$ means ``measuring one tells you the
+other''; $S_{ij}\approx 0$ means they are independent.
+\item $\det(L_B)$ is large only when the chosen genes are \emph{both} high quality (big
+diagonal) \emph{and} dissimilar (small off-diagonal, so the rows are nearly perpendicular).
+Two near-identical high-quality genes make two nearly-parallel rows, which collapses the
+determinant toward zero --- so the DPP will not pick both.
+\end{itemize}
+\textbf{Why this is principled (the key fact).} For Gaussian variables, $\tfrac12\log\det$
+of a covariance is the \emph{entropy} (information content). So maximizing $\log\det(L_B)$
+literally maximizes the information the batch carries: it is at once a quality objective
+and a diversity objective, not an ad-hoc combination. Finding the exact best size-$q$ set
+is computationally hard, so we add genes one at a time, each time taking the one that
+increases $\log\det$ the most (a fast ``greedy'' rule).
+
+\subsection{A simpler, robust hedge: cap genes per pathway}
+
+At genome scale the similarity $S$ is very sparse (almost no two genes are correlated), so
+the DPP's diversity term barely fires and a simpler tool is preferable: directly limit how
+many chosen genes may come from the same pathway. Given a map $\pi(i)=$ ``the set of
+pathways gene $i$ belongs to'' and a cap $c$, we go down the quality-ranked list and accept
+a gene only if none of its pathways has already hit $c$ members. \textbf{Why:} this bounds
+how concentrated the portfolio is in any single pathway using one interpretable number
+$c$, which matters for risk (Step 6), and it does not rely on the (often absent) similarity
+structure.
+
+\section{Step 4: defining toxicity and the safety constraint}
+
+\paragraph{Three ways to define toxicity.}
+\begin{enumerate}[leftmargin=2em,itemsep=2pt]
+\item \textbf{Common-essential (known in advance).}
+$c_i=\tfrac{1}{L}\sum_{\ell=1}^{L}\mathbf{1}[\mathrm{effect}_{i,\ell}<\tau_e]$.
+\textbf{Reading it:} count the fraction of all $L$ cell lines in which knocking out gene
+$i$ is strongly lethal ($\mathbf{1}[\cdot]$ is $1$ when true, else $0$; $\tau_e$ is the
+``strongly lethal'' threshold). A gene lethal almost everywhere is ``pan-essential'' ---
+it would likely kill normal cells too, so high $c_i$ $=$ toxic. This is known from prior
+screens, so we treat it as given.
+\item \textbf{Contrast line.} $t_i=-\,\mathrm{effect}_{i,B}$: lethality in one fixed
+reference cell line $B$ chosen to stand in for normal tissue. We do \emph{not} know this in
+advance; a second GP learns it.
+\item \textbf{Population.} $t_i=-\tfrac1L\sum_\ell \mathrm{effect}_{i,\ell}$: average
+lethality across the whole panel. Also learned.
+\end{enumerate}
+
+\paragraph{Why we use a hard constraint, not a penalty.} A tempting approach is to
+score genes by $s_i=e_i-\lambda t_i$ (efficacy minus a toxicity penalty). But this treats
+safety as something you can ``buy back'' with enough efficacy, and the weight $\lambda$ has
+no natural meaning or units. In drug discovery, a too-toxic target is simply \emph{ruled
+out}. So we impose a ceiling instead.
+
+\section{Step 5: constrained nomination (the selection rule)}
+
+\begin{equation}
+B^\star=\argmax_{|B|=K}\ \sum_{i\in B}\hat e_i \qquad\text{subject to}\qquad \hat t_i\le\tau\ \ \text{for every } i\in B .
 \label{eq:constrained}
 \end{equation}
-which, absent the pathway hedge, reduces to taking the top-$K$ candidates by predicted
-efficacy $\hat e_i$ among the \emph{eligible} set $\{i:\hat t_i\le\tau\}$. Sweeping
-$\tau$ traces a constrained efficacy--toxicity frontier. \emph{Why a constraint.} It
-matches how target nomination actually gates candidates (safety is a bar), gives a single
-interpretable knob ($\tau=$ maximum acceptable toxicity), and avoids the scale/unit
-ambiguity of $\lambda$. When toxicity is known a priori the constraint uses the known
-$c_i$; when learned, $\hat t_i$ is the toxicity-surrogate prediction (optionally an upper
-confidence bound for a conservative, high-probability safety guarantee). The per-pathway
-cap is layered on \eqref{eq:constrained} to additionally hedge mechanism.
-
-\section{Multi-objective active learning (joint efficacy--toxicity)}
-When both efficacy and toxicity are unknown, we explore the two axes jointly. Treat each
-gene as a point $f(x)=(e(x),-t(x))$ to be \emph{maximized} in both coordinates.
-
-\paragraph{Dominance and hypervolume.} Point $u$ dominates $v$ if $u\ge v$ componentwise
-with strict inequality somewhere. The \emph{Pareto front} of a set is its non-dominated
-subset. Given a reference point $r$ (a lower bound in both objectives), the dominated
-\emph{hypervolume} is
-\begin{equation}
-\mathrm{HV}(P;r)=\text{area}\Big(\bigcup_{p\in P}[r_1,p_1]\times[r_2,p_2]\Big),
-\end{equation}
-the area of objective space dominated by $P$ and above $r$. Larger HV $=$ better, broader
-coverage of the high-efficacy/low-toxicity region; it is the standard scalar summary of a
-multi-objective solution set.
-
-\paragraph{Expected hypervolume improvement (EHVI).} With independent Gaussian posteriors
-$f(x)\sim\mathcal{N}(\boldsymbol\mu(x),\operatorname{diag}\boldsymbol\sigma^2(x))$ and
-current front $P$, we acquire the candidate maximizing
-\begin{equation}
-a_{\mathrm{EHVI}}(x)=\E_{f(x)}\big[\,\mathrm{HV}(P\cup\{f(x)\};r)-\mathrm{HV}(P;r)\,\big]\;\ge 0 .
-\label{eq:ehvi}
-\end{equation}
-\emph{Why EHVI.} It is the multi-objective analogue of expected improvement: it rewards
-candidates expected to most enlarge the dominated region, automatically balancing
-exploration (uncertain points can yield large improvement) against exploitation
-(promising means) \emph{across the whole frontier}, without choosing a scalarization
-weight. We estimate \eqref{eq:ehvi} by Monte Carlo,
-\begin{equation}
-\hat a_{\mathrm{EHVI}}(x)=\frac1M\sum_{m=1}^{M}\max\!\big(0,\ \mathrm{HV}(P\cup\{f^{(m)}\};r)-\mathrm{HV}(P;r)\big),\quad f^{(m)}\sim\mathcal{N}(\boldsymbol\mu,\operatorname{diag}\boldsymbol\sigma^2),
-\end{equation}
-and select a size-$q$ batch greedily: pick the best candidate, add its posterior mean to
-the front as a ``fantasy,'' and recompute, $q$ times. To bound cost on large pools we
-restrict the Monte-Carlo evaluation to a shortlist of the most promising candidates by an
-optimistic score $\mu_1+\sigma_1+\mu_2+\sigma_2$ (a per-objective UCB), which never
-excludes a frontier-improving candidate in practice.
-
-\section{Portfolio-risk evaluation}\label{sec:risk}
-A nominated portfolio is also judged on \emph{pathway risk}, motivated by the fact that a
-pathway may later prove toxic in normal tissue or undruggable, in which case all targets
-within it fail together. With pathway membership $\pi$ and (positive) per-gene value
-$v_i$ (e.g.\ efficacy), define
-\begin{align}
-\text{concentration}\quad & C(B)=\max_{p\in\mathcal{P}}\frac{|\{i\in B:\,p\in\pi(i)\}|}{|\{i\in B:\,\pi(i)\neq\varnothing\}|},\\
-\text{dropout robustness}\quad & R(B)=1-\frac{1}{|\mathcal{P}_B|}\sum_{p\in\mathcal{P}_B}\frac{\sum_{i\in B:\,p\in\pi(i)} v_i}{\sum_{i\in B} v_i},
-\end{align}
-where $\mathcal{P}_B$ are the pathways present in $B$. $C(B)$ is the largest share of the
-portfolio in any single pathway (lower is safer); $R(B)$ is the expected fraction of
-portfolio value that survives if one random present pathway is eliminated (higher is
-safer). The per-pathway cap reduces $C$ and raises $R$ at a quantifiable efficacy cost,
-producing an efficacy--risk frontier.
-
-\section{Evaluation metrics}
-On a held-out objective (e.g.\ true top-$k$ lethal set) we report, as a function of AL
-round:
-\begin{itemize}[leftmargin=2em,itemsep=2pt]
-\item \textbf{recall@$k$}: fraction of the true top-$k$ (highest target) genes that have been revealed.
-\item \textbf{max value}: best true value among revealed genes, normalized by the global best (the single strongest hit found).
-\item \textbf{diversity}: mean pairwise embedding distance of the cumulative revealed set.
-\item \textbf{$\alpha$-NDCG@$k$}: a quality-weighted, redundancy-discounted coverage score (Clarke et al.). With nuggets (here, embedding clusters) and graded relevance $g_i$ (lethality), the gain of the gene at rank $i$ covering nugget $n$ is discounted by $(1-\alpha)^{r_{n,i-1}}$, where $r_{n,i-1}$ counts earlier genes already covering $n$; the discounted-cumulative gain is normalized by an ideal greedy ordering. It rewards recovering lethal genes that span \emph{distinct} mechanisms and penalizes redundant ones.
+\textbf{Reading it:} ``choose the $K$ genes with the highest predicted efficacy
+$\hat e_i$, but only among genes whose predicted toxicity $\hat t_i$ is at or below the
+safety ceiling $\tau$.'' Concretely: throw out every gene with $\hat t_i>\tau$, then take
+the top $K$ by predicted efficacy from what remains.
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item $\tau$ is the single, interpretable knob: ``the maximum toxicity I will tolerate.''
+\item Sweeping $\tau$ from strict to lenient traces an \emph{efficacy--safety frontier}: a
+tighter ceiling gives safer but typically less potent shortlists.
+\item If toxicity is known we use $c_i$ in the constraint; if learned we use the toxicity
+GP's prediction (optionally its \emph{upper} confidence bound, so we only admit genes we
+are \emph{confident} are safe).
+\item We then layer the per-pathway cap (Step 3.2) on top, so the shortlist is also
+mechanism-diversified.
 \end{itemize}
 
-\section{Summary of the pipeline}
+\section{Step 6: when both efficacy and toxicity are unknown (multi-objective AL)}
+
+If we must \emph{learn} toxicity too, each measurement reveals a gene's efficacy and its
+toxicity together, and we want to explore both at once. Now each gene is a \emph{point in
+two dimensions} $f(x)=(e(x),\,-t(x))$ --- we write $-t$ so that ``bigger is better'' on
+both axes (high efficacy, low toxicity).
+
+\paragraph{Domination and the Pareto front.} Point $u$ ``dominates'' $v$ if $u$ is at least
+as good on both axes and strictly better on one. The genes that are \emph{not} dominated by
+any other form the \emph{Pareto front} --- the set of best available trade-offs (you cannot
+improve efficacy without worsening toxicity, or vice versa). There is no single best point;
+the front is the answer.
+
+\paragraph{Hypervolume: scoring a whole front with one number.}
+\begin{equation}
+\mathrm{HV}(P;r)=\text{area}\Big(\bigcup_{p\in P}[r_1,p_1]\times[r_2,p_2]\Big).
+\end{equation}
+\textbf{Reading it:} pick a ``reference point'' $r$ that is worse than everything (a lower
+bound on both axes). For each point $p$ in the set $P$, draw the rectangle from $r$ up to
+$p$. The hypervolume is the total area covered by the union of those rectangles --- the
+amount of objective space that $P$ ``dominates.'' A larger hypervolume means the set covers
+more of the desirable high-efficacy/low-toxicity region. It is the standard single-number
+quality score for a set of trade-offs, and we track it over rounds to see how fast each
+method discovers good targets.
+
+\paragraph{Expected Hypervolume Improvement (EHVI): what to measure next.}
+\begin{equation}
+a_{\mathrm{EHVI}}(x)=\E_{f(x)}\big[\,\mathrm{HV}(P\cup\{f(x)\};r)-\mathrm{HV}(P;r)\,\big]\ \ge 0 .
+\label{eq:ehvi}
+\end{equation}
+\textbf{Reading it:} $P$ is the current front. $f(x)$ is the (uncertain, Gaussian) location
+the new gene would occupy. The bracket is ``how much would the hypervolume \emph{grow} if
+this gene landed where we think it might.'' The $\E[\cdot]$ averages that growth over the
+GP's uncertainty about $f(x)$. So EHVI rewards genes \emph{expected to enlarge the set of
+good trade-offs the most}. It is the two-dimensional version of Expected Improvement, and
+it automatically balances exploit (promising mean location) against explore (large
+uncertainty $\Rightarrow$ chance of a big improvement), \emph{without} needing to pick a
+trade-off weight. It is never negative because a gene can only add area, never remove it.
+
+\paragraph{How we compute it.} The expectation has no simple closed form we rely on, so we
+estimate it by \emph{Monte Carlo}: draw many possible $(e,-t)$ values from the gene's GP
+posterior, compute the hypervolume increase for each draw, and average:
+\begin{equation}
+\hat a_{\mathrm{EHVI}}(x)=\frac1M\sum_{m=1}^{M}\max\!\big(0,\ \mathrm{HV}(P\cup\{f^{(m)}\};r)-\mathrm{HV}(P;r)\big),\quad f^{(m)}\sim\mathcal{N}\!\big(\boldsymbol\mu(x),\operatorname{diag}\boldsymbol\sigma^2(x)\big).
+\end{equation}
+\textbf{Reading it:} $f^{(m)}$ is the $m$-th random ``what if this gene turns out here''
+sample; we average the area it would add over $M$ samples. To pick a batch of $q$, we take
+the best gene, pretend it landed at its predicted mean (a ``fantasy''), add that to the
+front, and recompute --- so the next pick complements the first. For speed on large gene
+lists we run this only on a shortlist of the most promising candidates (those with high
+optimistic efficacy and low optimistic toxicity), which never drops a genuinely
+front-improving gene.
+
+\section{Step 7: judging the portfolio's risk}
+
+Even a high-efficacy, low-toxicity shortlist can be \emph{fragile}: if all its targets sit
+in one pathway and that pathway later proves toxic or undruggable, every target fails at
+once. We measure this. With pathway membership $\pi$ and a per-gene value $v_i$ (e.g.\
+efficacy):
+\begin{align}
+\text{concentration}\quad & C(B)=\max_{p}\ \frac{\#\{\text{genes in } B \text{ that belong to pathway } p\}}{\#\{\text{genes in } B \text{ with any pathway}\}}, \label{eq:conc}\\[2pt]
+\text{dropout robustness}\quad & R(B)=1-\frac{1}{\#\text{pathways in }B}\sum_{p}\frac{\text{value of }B\text{'s genes in pathway }p}{\text{total value of }B}. \label{eq:rob}
+\end{align}
+\textbf{Reading \eqref{eq:conc}:} the single largest share of the portfolio sitting in any
+one pathway. $C=1$ means everything is in one pathway (maximum risk); a small $C$ means the
+bets are spread out. \emph{Lower is safer.}\\
+\textbf{Reading \eqref{eq:rob}:} imagine deleting one pathway at random (it turned out
+toxic), which removes all of $B$'s genes in it. The fraction summed is the share of value
+lost; averaging over which pathway gets deleted and subtracting from $1$ gives the
+\emph{expected fraction of value that survives}. \emph{Higher is safer.} The per-pathway
+cap improves both: it lowers $C$ and raises $R$, at a measurable cost in efficacy --- this
+trade-off is exactly the efficacy--risk frontier we report.
+
+\section{Step 8: how we measure success}
+As the AL loop runs we track, versus the number of rounds:
+\begin{itemize}[leftmargin=2em,itemsep=2pt]
+\item \textbf{recall@$k$}: of the truly $k$ most-lethal genes, what fraction have we
+measured so far? (Did we find the important ones, and how fast?)
+\item \textbf{max value}: the single best true efficacy among measured genes, divided by
+the global best (did we at least find one excellent hit, even if the average drops?).
+\item \textbf{diversity}: average pairwise fingerprint distance of everything measured ---
+how spread out our exploration is.
+\item \textbf{$\alpha$-NDCG@$k$}: a coverage score that rewards finding lethal genes across
+\emph{distinct} mechanisms and discounts redundant ones. It groups genes into ``nuggets''
+(here, clusters of similar genes); the credit for the gene at rank $i$ that covers nugget
+$n$ is multiplied by $(1-\alpha)^{r}$, where $r$ counts how many earlier-ranked genes
+already covered $n$. So the second, third, \dots\ gene from the same mechanism earns
+geometrically less. The total is normalized against an ideal ordering so it lands in
+$[0,1]$. High $=$ many lethal genes spanning many mechanisms.
+\end{itemize}
+
+\section{Putting it together}
 \begin{algorithm}[h]
-\caption{Risk-aware nomination round (constrained variant)}
+\caption{One round of risk-aware nomination (constrained variant)}
 \begin{algorithmic}[1]
-\State Fit efficacy GP on revealed $(X_D,\mathbf{e}_D)$; if toxicity unknown, fit toxicity GP.
-\State Predict $\hat e_i,\hat t_i$ (and uncertainties) for unrevealed candidates.
-\State Eligible set $\mathcal{E}=\{i:\hat t_i\le\tau\}$ \Comment{hard safety ceiling}
-\State Select $B$: greedily take highest-$\hat e_i$ genes in $\mathcal{E}$, capping $\le c$ per pathway.
-\State (AL loop) acquire informative genes by UCB / $k$-DPP / EHVI; reveal labels; repeat.
-\State Report efficacy, toxicity, pathway concentration / dropout robustness, recall@$k$.
+\State Fit the efficacy GP on the measured genes; if toxicity is unknown, fit a toxicity GP too.
+\State For every unmeasured gene, predict efficacy $\hat e_i$ and toxicity $\hat t_i$ (with uncertainties).
+\State Keep only genes that clear the safety ceiling: $\mathcal{E}=\{i:\hat t_i\le\tau\}$.
+\State Build the shortlist $B$: take the highest-$\hat e_i$ genes in $\mathcal{E}$, allowing at most $c$ per pathway.
+\State (Exploration) decide which genes to \emph{measure} next via UCB / $k$-DPP / EHVI; measure them; add to the measured set.
+\State Report efficacy, toxicity, pathway concentration and dropout robustness, and recall@$k$.
 \end{algorithmic}
 \end{algorithm}
 
-The components compose: GP surrogates provide calibrated predictions and uncertainty;
-UCB/$k$-DPP/EHVI choose what to assay; the constrained rule enforces safety as a ceiling;
-the per-pathway cap hedges mechanism; and the portfolio-risk and recovery metrics quantify
-the efficacy--safety--diversity trade-offs that a target-nomination pipeline must navigate.
+In short: the \textbf{GP} gives calibrated predictions and uncertainty; the
+\textbf{acquisition functions} (UCB / $k$-DPP / EHVI) decide what to measure to learn
+fastest; the \textbf{constraint} enforces safety as a hard ceiling; the \textbf{per-pathway
+cap} hedges against pathway-level failure; and the \textbf{metrics} quantify the
+efficacy--safety--diversity trade-offs a target-nomination pipeline must navigate.
 
 \begin{thebibliography}{9}
 \bibitem{rasmussen} C.~E.~Rasmussen and C.~K.~I.~Williams. \emph{Gaussian Processes for Machine Learning}. MIT Press, 2006.
+\bibitem{settles} B.~Settles. \emph{Active Learning Literature Survey}. Tech.\ Report, 2009.
 \bibitem{kulesza} A.~Kulesza and B.~Taskar. \emph{Determinantal Point Processes for Machine Learning}. Found.\ Trends ML, 2012.
-\bibitem{emmerich} M.~Emmerich, K.~Giannakoglou, B.~Naujoks. Single- and multiobjective evolutionary optimization assisted by Gaussian random field metamodels. \emph{IEEE Trans.\ Evol.\ Comput.}, 2006.
+\bibitem{emmerich} M.~Emmerich et al. Single- and multiobjective optimization assisted by Gaussian random field metamodels. \emph{IEEE TEC}, 2006.
 \bibitem{clarke} C.~L.~A.~Clarke et al. Novelty and diversity in information retrieval evaluation. \emph{SIGIR}, 2008.
 \end{thebibliography}
 
