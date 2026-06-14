@@ -16,7 +16,10 @@ N_LINES="${1:-40}"
 N_SEEDS="${2:-6}"
 N_SHARDS="${3:-8}"
 K="${4:-30}"
-EMB="data/processed/embeddings/pubmedbert_hvg.parquet"
+# Embedding cache (override with EMB=...). Default = genome-wide PubMedBERT cache
+# (no panel subset => full ~18.5k genes). Set PANEL=<file> to subset.
+EMB="${EMB:-data/processed/embeddings/pubmedbert_all.parquet}"
+PANEL_ARG=""; [ -n "${PANEL:-}" ] && PANEL_ARG="--panel ${PANEL}"
 GE="data/processed/depmap/gene_effect.parquet"
 MM="micromamba run -n geneal"
 
@@ -53,7 +56,7 @@ for ((i=0; i<N_SHARDS; i++)); do
     LINES="$(cat "$LINES_FILE")"
     (
         $MM python scripts/run_risk_nomination.py \
-            --gene-effect "$GE" --embeddings "$EMB" \
+            --gene-effect "$GE" --embeddings "$EMB" $PANEL_ARG \
             --cell-lines $LINES --seeds $SEEDS --K "$K" \
             --out-root "$ROOT" --run-name "shard_${i}" \
             >"${ROOT}/shard_${i}.log" 2>&1
