@@ -46,15 +46,36 @@ def hypervolume2d(P: np.ndarray, ref: np.ndarray) -> float:
 def mc_ehvi(mean, std, front, ref, rng, n_samples: int = 128) -> np.ndarray:
     """Monte-Carlo Expected Hypervolume Improvement per candidate (maximize both
     objectives). mean/std: (n_cand, 2) independent-Gaussian posteriors. front:
-    current Pareto set (m, 2). Returns EHVI >= 0 per candidate."""
+    current Pareto set (m, 2). Returns EHVI >= 0 per candidate.
+
+    Vectorized: the 2-D hypervolume improvement of a point q=(a,b) over the front
+    is the band integral  int_{ref_x}^{a} max(0, b - h(x)) dx,  where h(x) is the
+    front's (non-increasing) upper-boundary step function. Precompute the bands
+    once, evaluate all (sample x candidate) draws against them with numpy."""
     mean = np.asarray(mean, float); std = np.asarray(std, float)
     front = np.asarray(front, float).reshape(-1, 2)
-    base = hypervolume2d(front, ref)
     n = len(mean)
-    out = np.zeros(n)
-    for s in range(n_samples):
-        draw = mean + std * rng.standard_normal(mean.shape)  # (n,2)
-        for i in range(n):
-            hv = hypervolume2d(np.vstack([front, draw[i]]), ref)
-            out[i] += max(hv - base, 0.0)
-    return out / n_samples
+    draws = mean[None] + std[None] * rng.standard_normal((n_samples, n, 2))  # (S,n,2)
+    A = draws[..., 0]; B = draws[..., 1]                                      # (S,n)
+
+    if len(front):
+        pf = front[pareto_front(front)]
+        pf = pf[(pf[:, 0] > ref[0]) & (pf[:, 1] > ref[1])]
+    else:
+        pf = np.empty((0, 2))
+    if len(pf) == 0:                       # empty front: HVI = box area above ref
+        imp = np.clip(A - ref[0], 0, None) * np.clip(B - ref[1], 0, None)
+        return imp.mean(axis=0)
+
+    pf = pf[np.argsort(pf[:, 0])]          # x ascending -> y descending
+    fx, fy = pf[:, 0], pf[:, 1]
+    lo = np.concatenate([[ref[0]], fx])    # band left edges   (m+1,)
+    hi = np.concatenate([fx, [np.inf]])    # band right edges  (m+1,)
+    h = np.concatenate([fy, [ref[1]]])     # band heights      (m+1,)
+
+    out = np.zeros((n_samples, n))
+    for k in range(len(h)):
+        width = np.clip(np.minimum(hi[k], A) - lo[k], 0.0, None)
+        height = np.clip(B - h[k], 0.0, None)
+        out += width * height
+    return out.mean(axis=0)
