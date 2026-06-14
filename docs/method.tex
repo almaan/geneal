@@ -1,0 +1,250 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\eff}{\mathrm{eff}}
+\newcommand{\tox}{\mathrm{tox}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{\textbf{geneal}: Active Learning for Risk-Aware Knockout Target Nomination\\
+\large Method}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe an active-learning framework for nominating gene-knockout targets that
+are simultaneously \emph{efficacious} (lethal in a cancer cell line), \emph{safe}
+(not broadly essential / not lethal in a reference context), and \emph{mechanistically
+diversified} (not concentrated in a single pathway). The method couples Gaussian-process
+surrogates over a fixed gene representation, principled acquisition functions
+(upper-confidence-bound, determinantal batch selection, and expected hypervolume
+improvement for the multi-objective case), a constrained nomination rule that treats
+safety as a hard ceiling, and a portfolio hedge that bounds per-pathway exposure to
+guard against pathway-level failure. We give the mathematical grounding and rationale
+for each step. Data acquisition and representation are out of scope here.
+\end{abstract}
+
+\section{Problem setup and notation}
+Let $\mathcal{G}=\{1,\dots,N\}$ index candidate genes, each with a fixed feature vector
+(embedding) $x_i\in\R^d$. For a chosen cell line we define the \emph{efficacy} of
+knocking out gene $i$ as the lethality $e_i = -\,\mathrm{effect}_i$, where
+$\mathrm{effect}_i$ is the (Chronos) gene-effect score; more negative effect $\Rightarrow$
+higher lethality $\Rightarrow$ higher efficacy. We also define a \emph{toxicity}
+$t_i\ge 0$ that measures undesired lethality in non-target contexts (\S\ref{sec:tox}).
+The goal is to select a batch (portfolio) $B\subset\mathcal{G}$, $|B|=K$, that has high
+efficacy and low toxicity while being spread across biological pathways.
+
+Active learning proceeds in rounds. At each round we have a \emph{revealed} set
+$D\subset\mathcal{G}$ of genes whose labels (efficacy, and toxicity when unknown) have
+been assayed; we fit surrogate models on $D$, score the unrevealed candidates with an
+acquisition function, acquire a batch of $q$ new genes, and repeat. All randomness uses
+explicit, seeded generators so runs are reproducible, and competing methods share the
+same initial set and noise draws (\emph{common random numbers}) for paired comparison.
+
+\section{Gaussian-process surrogate}
+We model each scalar objective $y\in\{e,t\}$ as a draw from a Gaussian process,
+\begin{equation}
+y(x)\sim\mathcal{GP}\big(m(x),\,k(x,x')\big),
+\end{equation}
+with constant mean $m$ and a Mat\'ern kernel (smoothness $\nu=5/2$) with a scale
+factor,
+\begin{equation}
+k(x,x') = \theta\Big(1+\tfrac{\sqrt{5}r}{\ell}+\tfrac{5r^2}{3\ell^2}\Big)\exp\!\Big(-\tfrac{\sqrt5 r}{\ell}\Big),\qquad r=\lVert x-x'\rVert .
+\end{equation}
+\emph{Why a GP.} Active learning needs \emph{calibrated uncertainty}, not just point
+predictions: the acquisition functions below trade off exploiting high predicted values
+against exploring uncertain regions. A GP gives a closed-form posterior with both a mean
+and a variance. The Mat\'ern-$5/2$ kernel is a standard, mildly smooth default that does
+not assume the infinite differentiability of the RBF kernel.
+
+Given revealed inputs $X_D$ and noisy labels $\mathbf{y}_D$ (observation noise
+$\sigma_n^2$), the posterior at a test point $x_\ast$ is Gaussian with
+\begin{align}
+\mu(x_\ast) &= k_\ast^\top (K+\sigma_n^2 I)^{-1}\mathbf{y}_D,\\
+\sigma^2(x_\ast) &= k(x_\ast,x_\ast) - k_\ast^\top (K+\sigma_n^2 I)^{-1} k_\ast,
+\end{align}
+where $K_{ij}=k(x_i,x_j)$ and $(k_\ast)_i=k(x_i,x_\ast)$. For a set of test points we
+similarly obtain a joint posterior mean vector and covariance matrix $\Sigma_\ast$.
+Kernel hyperparameters $(\theta,\ell,\sigma_n)$ are fit by maximizing the exact log
+marginal likelihood
+\begin{equation}
+\log p(\mathbf{y}_D\mid X_D)= -\tfrac12 \mathbf{y}_D^\top(K+\sigma_n^2 I)^{-1}\mathbf{y}_D
+-\tfrac12\log\lvert K+\sigma_n^2 I\rvert -\tfrac{n}{2}\log 2\pi .
+\end{equation}
+Inputs and targets are standardized before fitting; predictions are returned on the
+original scale. For multi-objective problems we fit one independent GP per objective.
+
+\section{Single-objective acquisition}
+Given the posterior $(\mu,\sigma)$ over candidates and the best revealed value $y^+$, we
+use standard acquisitions:
+\begin{align}
+\text{UCB:}\quad & a_{\mathrm{UCB}}(x)=\mu(x)+\beta\,\sigma(x),\\
+\text{EI:}\quad & a_{\mathrm{EI}}(x)=(\mu(x)-y^+)\,\Phi(z)+\sigma(x)\,\phi(z),\quad z=\tfrac{\mu(x)-y^+}{\sigma(x)},
+\end{align}
+with $\Phi,\phi$ the standard normal CDF/PDF. \emph{Why.} UCB makes the
+explore--exploit trade-off explicit through $\beta$; EI is the expected positive
+improvement over the incumbent. Both are maximized (higher score $=$ more desirable).
+
+\section{Diversified batch selection}
+When a round acquires $q>1$ genes, taking the top-$q$ by acquisition score can return a
+redundant batch. We consider two diversification mechanisms.
+
+\subsection{Quality-weighted $k$-DPP}
+A determinantal point process (DPP) over candidates with an $L$-ensemble kernel
+$L\in\R^{N\times N}$ assigns a subset $B$ probability
+\begin{equation}
+\Pr(B)\;\propto\;\det\!\big(L_B\big),
+\end{equation}
+where $L_B$ is the principal submatrix indexed by $B$. We set
+\begin{equation}
+L_{ij}=q_i\,S_{ij}\,q_j,\qquad q_i=a(x_i)\ \text{(quality, e.g.\ UCB)},\quad
+S_{ij}=\frac{\Sigma_{\ast,ij}}{\sqrt{\Sigma_{\ast,ii}\Sigma_{\ast,jj}}}\ \text{(outcome correlation)} .
+\end{equation}
+$\det(L_B)$ is large when the chosen genes are both high quality (large diagonal
+$q_i^2$) and mutually dissimilar (near-orthogonal rows, small off-diagonal $S$).
+\emph{Why this is principled.} For a Gaussian, $\tfrac12\log\det(\text{covariance})$ is
+the differential entropy; maximizing $\log\det L_B$ therefore maximizes the joint
+information content of the batch. So a quality-weighted $k$-DPP is simultaneously an
+information-theoretic and a quality$\times$diversity objective. Exact selection of the
+size-$q$ maximizer is NP-hard; we use the greedy MAP rule, which adds at each step the
+candidate with the largest marginal gain in $\log\det$ and admits an $O(q^2N)$
+incremental Cholesky update.
+
+\subsection{Hard per-pathway cap}
+In practice (genome-scale candidate pools) the similarity $S$ is too sparse to create a
+tunable trade-off, and a simpler, interpretable hedge is preferred: cap the number of
+selected genes per pathway. Given a pathway membership map
+$\pi:\mathcal{G}\to 2^{\mathcal{P}}$ (gene $\to$ set of complexes/pathways) and a cap
+$c$, we greedily take genes in decreasing quality order, admitting gene $i$ only if no
+pathway $p\in\pi(i)$ has already reached $c$ selected members. \emph{Why.} This directly
+bounds per-pathway exposure (\S\ref{sec:risk}) with a single, meaningful knob, and is
+robust to sparse similarity structure.
+
+\section{Toxicity and the selectivity objective}\label{sec:tox}
+We instantiate toxicity in one of three ways:
+\begin{enumerate}[leftmargin=2em,itemsep=2pt]
+\item \textbf{Common-essential (a priori).} $c_i=\tfrac{1}{L}\sum_{\ell=1}^{L}\mathbf{1}[\mathrm{effect}_{i,\ell}<\tau_e]$, the fraction of all $L$ cell lines in which knocking out gene $i$ is strongly lethal. Pan-essential genes (high $c_i$) would also kill normal tissue and are the toxicity proxy. This quantity is known prior knowledge from existing screens.
+\item \textbf{Contrast line.} $t_i = -\,\mathrm{effect}_{i,B}$, the lethality in a fixed, different-domain reference cell line $B$ (a stand-in for normal tissue). Treated as \emph{unknown} and learned by a second GP.
+\item \textbf{Population.} $t_i = -\,\tfrac1L\sum_\ell \mathrm{effect}_{i,\ell}$, mean lethality across the population. Also learned.
+\end{enumerate}
+A simple scalarized \emph{selective lethality} is $s_i = e_i-\lambda\,t_i$. However, treating
+safety as a freely tradeable penalty is unsatisfying (a too-toxic target should be
+disqualified, not merely down-weighted), and $\lambda$ has no natural units. We therefore
+prefer the constrained formulation below.
+
+\section{Constrained nomination}
+We maximize predicted efficacy subject to a hard safety ceiling $\tau$:
+\begin{equation}
+B^\star=\argmax_{|B|=K}\ \sum_{i\in B}\hat e_i \quad\text{s.t.}\quad \hat t_i\le\tau\ \ \forall i\in B,
+\label{eq:constrained}
+\end{equation}
+which, absent the pathway hedge, reduces to taking the top-$K$ candidates by predicted
+efficacy $\hat e_i$ among the \emph{eligible} set $\{i:\hat t_i\le\tau\}$. Sweeping
+$\tau$ traces a constrained efficacy--toxicity frontier. \emph{Why a constraint.} It
+matches how target nomination actually gates candidates (safety is a bar), gives a single
+interpretable knob ($\tau=$ maximum acceptable toxicity), and avoids the scale/unit
+ambiguity of $\lambda$. When toxicity is known a priori the constraint uses the known
+$c_i$; when learned, $\hat t_i$ is the toxicity-surrogate prediction (optionally an upper
+confidence bound for a conservative, high-probability safety guarantee). The per-pathway
+cap is layered on \eqref{eq:constrained} to additionally hedge mechanism.
+
+\section{Multi-objective active learning (joint efficacy--toxicity)}
+When both efficacy and toxicity are unknown, we explore the two axes jointly. Treat each
+gene as a point $f(x)=(e(x),-t(x))$ to be \emph{maximized} in both coordinates.
+
+\paragraph{Dominance and hypervolume.} Point $u$ dominates $v$ if $u\ge v$ componentwise
+with strict inequality somewhere. The \emph{Pareto front} of a set is its non-dominated
+subset. Given a reference point $r$ (a lower bound in both objectives), the dominated
+\emph{hypervolume} is
+\begin{equation}
+\mathrm{HV}(P;r)=\text{area}\Big(\bigcup_{p\in P}[r_1,p_1]\times[r_2,p_2]\Big),
+\end{equation}
+the area of objective space dominated by $P$ and above $r$. Larger HV $=$ better, broader
+coverage of the high-efficacy/low-toxicity region; it is the standard scalar summary of a
+multi-objective solution set.
+
+\paragraph{Expected hypervolume improvement (EHVI).} With independent Gaussian posteriors
+$f(x)\sim\mathcal{N}(\boldsymbol\mu(x),\operatorname{diag}\boldsymbol\sigma^2(x))$ and
+current front $P$, we acquire the candidate maximizing
+\begin{equation}
+a_{\mathrm{EHVI}}(x)=\E_{f(x)}\big[\,\mathrm{HV}(P\cup\{f(x)\};r)-\mathrm{HV}(P;r)\,\big]\;\ge 0 .
+\label{eq:ehvi}
+\end{equation}
+\emph{Why EHVI.} It is the multi-objective analogue of expected improvement: it rewards
+candidates expected to most enlarge the dominated region, automatically balancing
+exploration (uncertain points can yield large improvement) against exploitation
+(promising means) \emph{across the whole frontier}, without choosing a scalarization
+weight. We estimate \eqref{eq:ehvi} by Monte Carlo,
+\begin{equation}
+\hat a_{\mathrm{EHVI}}(x)=\frac1M\sum_{m=1}^{M}\max\!\big(0,\ \mathrm{HV}(P\cup\{f^{(m)}\};r)-\mathrm{HV}(P;r)\big),\quad f^{(m)}\sim\mathcal{N}(\boldsymbol\mu,\operatorname{diag}\boldsymbol\sigma^2),
+\end{equation}
+and select a size-$q$ batch greedily: pick the best candidate, add its posterior mean to
+the front as a ``fantasy,'' and recompute, $q$ times. To bound cost on large pools we
+restrict the Monte-Carlo evaluation to a shortlist of the most promising candidates by an
+optimistic score $\mu_1+\sigma_1+\mu_2+\sigma_2$ (a per-objective UCB), which never
+excludes a frontier-improving candidate in practice.
+
+\section{Portfolio-risk evaluation}\label{sec:risk}
+A nominated portfolio is also judged on \emph{pathway risk}, motivated by the fact that a
+pathway may later prove toxic in normal tissue or undruggable, in which case all targets
+within it fail together. With pathway membership $\pi$ and (positive) per-gene value
+$v_i$ (e.g.\ efficacy), define
+\begin{align}
+\text{concentration}\quad & C(B)=\max_{p\in\mathcal{P}}\frac{|\{i\in B:\,p\in\pi(i)\}|}{|\{i\in B:\,\pi(i)\neq\varnothing\}|},\\
+\text{dropout robustness}\quad & R(B)=1-\frac{1}{|\mathcal{P}_B|}\sum_{p\in\mathcal{P}_B}\frac{\sum_{i\in B:\,p\in\pi(i)} v_i}{\sum_{i\in B} v_i},
+\end{align}
+where $\mathcal{P}_B$ are the pathways present in $B$. $C(B)$ is the largest share of the
+portfolio in any single pathway (lower is safer); $R(B)$ is the expected fraction of
+portfolio value that survives if one random present pathway is eliminated (higher is
+safer). The per-pathway cap reduces $C$ and raises $R$ at a quantifiable efficacy cost,
+producing an efficacy--risk frontier.
+
+\section{Evaluation metrics}
+On a held-out objective (e.g.\ true top-$k$ lethal set) we report, as a function of AL
+round:
+\begin{itemize}[leftmargin=2em,itemsep=2pt]
+\item \textbf{recall@$k$}: fraction of the true top-$k$ (highest target) genes that have been revealed.
+\item \textbf{max value}: best true value among revealed genes, normalized by the global best (the single strongest hit found).
+\item \textbf{diversity}: mean pairwise embedding distance of the cumulative revealed set.
+\item \textbf{$\alpha$-NDCG@$k$}: a quality-weighted, redundancy-discounted coverage score (Clarke et al.). With nuggets (here, embedding clusters) and graded relevance $g_i$ (lethality), the gain of the gene at rank $i$ covering nugget $n$ is discounted by $(1-\alpha)^{r_{n,i-1}}$, where $r_{n,i-1}$ counts earlier genes already covering $n$; the discounted-cumulative gain is normalized by an ideal greedy ordering. It rewards recovering lethal genes that span \emph{distinct} mechanisms and penalizes redundant ones.
+\end{itemize}
+
+\section{Summary of the pipeline}
+\begin{algorithm}[h]
+\caption{Risk-aware nomination round (constrained variant)}
+\begin{algorithmic}[1]
+\State Fit efficacy GP on revealed $(X_D,\mathbf{e}_D)$; if toxicity unknown, fit toxicity GP.
+\State Predict $\hat e_i,\hat t_i$ (and uncertainties) for unrevealed candidates.
+\State Eligible set $\mathcal{E}=\{i:\hat t_i\le\tau\}$ \Comment{hard safety ceiling}
+\State Select $B$: greedily take highest-$\hat e_i$ genes in $\mathcal{E}$, capping $\le c$ per pathway.
+\State (AL loop) acquire informative genes by UCB / $k$-DPP / EHVI; reveal labels; repeat.
+\State Report efficacy, toxicity, pathway concentration / dropout robustness, recall@$k$.
+\end{algorithmic}
+\end{algorithm}
+
+The components compose: GP surrogates provide calibrated predictions and uncertainty;
+UCB/$k$-DPP/EHVI choose what to assay; the constrained rule enforces safety as a ceiling;
+the per-pathway cap hedges mechanism; and the portfolio-risk and recovery metrics quantify
+the efficacy--safety--diversity trade-offs that a target-nomination pipeline must navigate.
+
+\begin{thebibliography}{9}
+\bibitem{rasmussen} C.~E.~Rasmussen and C.~K.~I.~Williams. \emph{Gaussian Processes for Machine Learning}. MIT Press, 2006.
+\bibitem{kulesza} A.~Kulesza and B.~Taskar. \emph{Determinantal Point Processes for Machine Learning}. Found.\ Trends ML, 2012.
+\bibitem{emmerich} M.~Emmerich, K.~Giannakoglou, B.~Naujoks. Single- and multiobjective evolutionary optimization assisted by Gaussian random field metamodels. \emph{IEEE Trans.\ Evol.\ Comput.}, 2006.
+\bibitem{clarke} C.~L.~A.~Clarke et al. Novelty and diversity in information retrieval evaluation. \emph{SIGIR}, 2008.
+\end{thebibliography}
+
+\end{document}
