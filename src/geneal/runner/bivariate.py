@@ -10,12 +10,18 @@ class BivariateALRunner:
     Batch acquisition = greedy EHVI over the two GP posteriors. Toxicity is
     minimized, so we maximize (efficacy, −toxicity) in objective space."""
 
-    def __init__(self, surrogate_factory, noise, ehvi_samples: int = 64):
+    def __init__(self, surrogate_factory, noise, ehvi_samples: int = 64,
+                 shortlist: int = 200):
         self.make = surrogate_factory
         self.noise = noise
         self.ehvi_samples = ehvi_samples
+        self.shortlist = shortlist   # run EHVI only on the top-N most promising candidates
 
-    def run(self, X, efficacy, toxicity, n_initial, n_rounds, batch_size, seed):
+    def run(self, X, efficacy, toxicity, n_initial, n_rounds, batch_size, seed,
+            tox_known=False):
+        """tox_known=True: toxicity is an ORACLE (known a priori for all genes) —
+        only efficacy is learned. This is the ceiling condition for comparing
+        against learning toxicity. Default False = both objectives learned."""
         X = np.asarray(X, float)
         eff = np.asarray(efficacy, float); tox = np.asarray(toxicity, float)
         n = len(eff)
@@ -41,13 +47,24 @@ class BivariateALRunner:
             ye = np.array([eff[i] + noise_e[i] for i in revealed])
             yt = np.array([tox[i] + noise_t[i] for i in revealed])
             se = self.make().fit(X[revealed], ye)
-            st = self.make().fit(X[revealed], yt)
             cand = [i for i in range(n) if i not in set(revealed)]
             if not cand:
                 break
-            me, sde = se.predict(X[cand]); mt, sdt = st.predict(X[cand])
+            me, sde = se.predict(X[cand])
+            if tox_known:
+                mt = tox[cand]; sdt = np.zeros(len(cand))   # oracle toxicity
+            else:
+                st = self.make().fit(X[revealed], yt)
+                mt, sdt = st.predict(X[cand])
             mean = np.column_stack([me, -mt])     # maximize eff, -tox
             std = np.column_stack([sde, sdt])
+            # shortlist: run the (slow) MC-EHVI only on the most promising
+            # candidates by OPTIMISTIC selectivity (UCB on both objectives).
+            if self.shortlist and len(cand) > self.shortlist:
+                opt = (mean + std).sum(axis=1)    # optimistic eff + (-tox)
+                keep = np.argsort(opt)[::-1][:self.shortlist]
+                cand = [cand[i] for i in keep]
+                mean, std = mean[keep], std[keep]
             # current front from revealed objective points
             pts = np.array([[eff[i], -tox[i]] for i in revealed])
             front = pts[pareto_front(pts)]
