@@ -1,9 +1,41 @@
 # src/geneal/data/selective.py
 from __future__ import annotations
+import re
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from geneal.data.dataset import Dataset
 from geneal.data.depmap import parse_entrez
+
+_SYM = re.compile(r"^(.*?)\s*\(\d+\)$")
+
+
+def corum_membership(gene_names,
+                     cache="data/processed/depmap/corum_membership_all.parquet",
+                     corum_path="data/corum_dl/humanComplexes.txt") -> dict:
+    """gene_idx -> set of CORUM complex_ids, keyed by position in `gene_names`.
+
+    Prefers the genome-wide membership cache (entrez -> complex_id); falls back to
+    parsing the raw CORUM file by gene symbol. Used by the cap operator (per-
+    pathway hedging) and the concentration / robustness / n_pathways metrics."""
+    if Path(cache).exists():
+        mdf = pd.read_parquet(cache)
+        ent2c: dict = {}
+        for ent, cid in zip(mdf["entrez"], mdf["complex_id"]):
+            ent2c.setdefault(int(ent), set()).add(int(cid))
+        return {i: ent2c.get(int(parse_entrez(lab) or -1), set())
+                for i, lab in enumerate(gene_names)}
+    df = pd.read_csv(corum_path, sep="\t")
+    sym2c: dict = {}
+    for _, r in df.iterrows():
+        cid = int(r["complex_id"])
+        for s in re.split(r"[;,]", str(r.get("subunits_gene_name", "") or "")):
+            if s.strip():
+                sym2c.setdefault(s.strip(), set()).add(cid)
+    def _sym(label):
+        m = _SYM.match(label)
+        return (m.group(1) if m else label).strip()
+    return {i: sym2c.get(_sym(lab), set()) for i, lab in enumerate(gene_names)}
 
 
 def common_essential_score(gene_effect: pd.DataFrame, thresh: float = -0.5) -> pd.Series:
