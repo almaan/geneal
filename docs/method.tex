@@ -173,6 +173,21 @@ the \emph{expected amount by which this gene would beat the current best}, accou
 uncertainty: it is large either when the mean clearly beats $y^+$, or when the gene is
 uncertain enough to plausibly beat it. Higher $=$ more worth measuring.
 
+\paragraph{Baseline acquisitions we compare against.} To show the model-driven scores above
+are actually buying us something, we race them against three simpler rules that ignore the
+GP's \emph{quality} signal:
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item \textbf{Random}: measure a uniformly random batch each round. The floor any useful
+method must beat.
+\item \textbf{CoreSet} (greedy $k$-center): repeatedly pick the gene whose fingerprint is
+\emph{farthest} from everything measured so far. Pure geometric spread, quality-blind.
+\item \textbf{TypiClust}: cluster the candidates in fingerprint space and pick the most
+``typical'' (densest-neighbourhood) gene from each cluster. Also diversity-only.
+\end{itemize}
+CoreSet and TypiClust are the selection rules of a representative prior diversity-first
+method (IterPert); including them tests whether \emph{quality-aware} acquisition (UCB / EHVI)
+beats \emph{quality-blind} diversity at finding safe, potent targets.
+
 \section{Step 3: choosing a non-redundant batch}
 
 We measure $q>1$ genes per round. Naively taking the top-$q$ by acquisition score can give
@@ -191,10 +206,20 @@ determinant of a small matrix built from $B$:
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
 \item $q_i$ is the \emph{quality} of gene $i$ --- e.g.\ its UCB score. It appears on both sides,
 so the diagonal of $L$ is $q_i^2$: high-quality genes have large diagonal entries.
-\item $S_{ij}\in[-1,1]$ is the \emph{similarity} between genes $i$ and $j$ in outcome space,
+\item $S_{ij}\in[-1,1]$ is the \emph{similarity} between genes $i$ and $j$. Two sources are
+natural, and we use them in different places. (a) \emph{Outcome similarity}:
 $S_{ij}=\Sigma_{ij}/\sqrt{\Sigma_{ii}\Sigma_{jj}}$, the correlation from the GP's joint
-posterior covariance $\Sigma$. $S_{ij}\approx 1$ means ``measuring one tells you the
-other''; $S_{ij}\approx 0$ means they are independent.
+posterior covariance $\Sigma$ --- ``measuring one tells you the other.'' (b) \emph{Biological
+similarity from a network}: the STRING combined-score $S_{ij}\in[0,1]$ between genes $i$ and
+$j$ (how strongly the database links them). $S_{ij}\approx 1$ means closely related;
+$S_{ij}\approx 0$ means unrelated.
+\item \textbf{A note on STRING (important).} STRING is a \emph{network}, not a per-gene
+feature vector: it yields a pairwise \emph{similarity}, never an embedding to predict from.
+So STRING never enters the GP --- efficacy/toxicity are predicted from a learned embedding
+(here, gene-text embeddings). STRING is used \emph{only} as the diversity similarity $S$ in
+the determinant above, and the same network backs the pathway cap below. Prediction and
+diversity-structure are deliberately separated: the embedding predicts, the graph
+diversifies.
 \item $\det(L_B)$ is large only when the chosen genes are \emph{both} high quality (big
 diagonal) \emph{and} dissimilar (small off-diagonal, so the rows are nearly perpendicular).
 Two near-identical high-quality genes make two nearly-parallel rows, which collapses the
@@ -212,11 +237,16 @@ increases $\log\det$ the most (a fast ``greedy'' rule).
 At genome scale the similarity $S$ is very sparse (almost no two genes are correlated), so
 the DPP's diversity term barely fires and a simpler tool is preferable: directly limit how
 many chosen genes may come from the same pathway. Given a map $\pi(i)=$ ``the set of
-pathways gene $i$ belongs to'' and a cap $c$, we go down the quality-ranked list and accept
+pathways gene $i$ belongs to'' (here, the protein complexes gene $i$ belongs to in the
+CORUM database) and a cap $c$, we go down the quality-ranked list and accept
 a gene only if none of its pathways has already hit $c$ members. \textbf{Why:} this bounds
 how concentrated the portfolio is in any single pathway using one interpretable number
-$c$, which matters for risk (Step 6), and it does not rely on the (often absent) similarity
-structure.
+$c$, which matters for risk (Step 7), and it does not rely on the (often absent) similarity
+structure. Like STRING, CORUM is graph/database structure layered on the diversity step,
+not a prediction input. \textbf{Why $c{=}2$ by default:} $c{=}1$ forbids any two targets
+sharing a complex --- often too strict when several subunits of one complex are all strong
+hits --- while large $c$ stops hedging; $c{=}2$ allows a pair per complex, the loosest cap
+that still rules out piling a portfolio into one mechanism.
 
 \section{Step 4: defining toxicity and the safety constraint}
 
@@ -288,6 +318,24 @@ more of the desirable high-efficacy/low-toxicity region. It is the standard sing
 quality score for a set of trade-offs, and we track it over rounds to see how fast each
 method discovers good targets.
 
+\paragraph{How we set the reference point $r$.} The reference must sit \emph{below and to
+the left of every point} (worse on both axes), or some points contribute zero area and the
+score is distorted. But it should not sit \emph{arbitrarily} far away, because the constant
+$\mathrm{HV}$ offset that adds is uninformative and can swamp the differences between
+methods. We therefore anchor it just past the worst observed value on each axis:
+\begin{equation}
+r=\Big(\,e_{\min}-0.1\,(e_{\max}-e_{\min}),\ \ -t_{\max}-0.1\,(t_{\max}-t_{\min})\,\Big),
+\end{equation}
+\textbf{reading it:} take the smallest efficacy and the largest toxicity actually seen,
+then step a further $10\%$ of each axis's spread ($e_{\max}-e_{\min}$ is the efficacy range)
+outward. \textbf{Why this rule:} (i) it is guaranteed below every real point, so every
+front member contributes positive area; (ii) the $10\%$ pad keeps even the single
+worst-but-non-dominated point from getting exactly zero credit (which would make its
+improvements invisible); (iii) it is computed from the data range, so it scales
+automatically to whatever units efficacy and toxicity happen to have --- no hand-tuned
+absolute number. The $0.1$ is not delicate: any small positive pad gives the same ranking
+of methods, since it shifts every method's hypervolume by the same constant.
+
 \paragraph{Expected Hypervolume Improvement (EHVI): what to measure next.}
 \begin{equation}
 a_{\mathrm{EHVI}}(x)=\E_{f(x)}\big[\,\mathrm{HV}(P\cup\{f(x)\};r)-\mathrm{HV}(P;r)\,\big]\ \ge 0 .
@@ -337,41 +385,115 @@ cap improves both: it lowers $C$ and raises $R$, at a measurable cost in efficac
 trade-off is exactly the efficacy--risk frontier we report.
 
 \section{Step 8: how we measure success}
-As the AL loop runs we track, versus the number of rounds:
-\begin{itemize}[leftmargin=2em,itemsep=2pt]
-\item \textbf{recall@$k$}: of the truly $k$ most-lethal genes, what fraction have we
-measured so far? (Did we find the important ones, and how fast?)
-\item \textbf{max value}: the single best true efficacy among measured genes, divided by
-the global best (did we at least find one excellent hit, even if the average drops?).
-\item \textbf{diversity}: average pairwise fingerprint distance of everything measured ---
-how spread out our exploration is.
-\item \textbf{$\alpha$-NDCG@$k$}: a coverage score that rewards finding lethal genes across
-\emph{distinct} mechanisms and discounts redundant ones. It groups genes into ``nuggets''
-(here, clusters of similar genes); the credit for the gene at rank $i$ that covers nugget
-$n$ is multiplied by $(1-\alpha)^{r}$, where $r$ counts how many earlier-ranked genes
-already covered $n$. So the second, third, \dots\ gene from the same mechanism earns
-geometrically less. The total is normalized against an ideal ordering so it lands in
-$[0,1]$. High $=$ many lethal genes spanning many mechanisms.
+We judge the final nominated portfolio $B$ (the $K$ targets a method would hand a
+biologist) on its \emph{true} efficacy/toxicity values --- the model's predictions are used
+to \emph{choose} $B$, but success is scored against ground truth. The metrics split along
+the two things we care about.
+
+\paragraph{Safety vs.\ efficacy (is the portfolio potent and safe?).}
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item \textbf{Mean efficacy} $\tfrac1K\sum_{i\in B} e_i$: average true lethality of the
+portfolio. Higher $=$ more potent overall.
+\item \textbf{Max efficacy} $\max_{i\in B} e_i$: the single best true hit. Reported
+alongside the mean because a good hedge should keep a strong best hit even when it trades a
+little average potency for safety/diversity.
+\item \textbf{Mean toxicity} $\tfrac1K\sum_{i\in B} t_i$: average true toxicity (here the
+common-essential score). \emph{Lower is safer.} A method is better if it reaches the same
+efficacy at lower toxicity --- the up-and-to-the-left direction on the efficacy--toxicity
+plane.
 \end{itemize}
 
+\paragraph{Diversity / robustness (is the portfolio spread across mechanisms?).}
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item \textbf{Pathway concentration} $C(B)$ and \textbf{dropout robustness} $R(B)$, exactly
+as defined in Step 7 (lower $C$ / higher $R$ $=$ better hedged).
+\item \textbf{Distinct pathways}: the number of different CORUM complexes the portfolio
+touches. More $=$ broader mechanistic coverage.
+\item \textbf{$\alpha$-NDCG@$k$}: a coverage score that rewards covering \emph{distinct}
+mechanisms and discounts redundant ones. It groups genes into ``nuggets'' (clusters of
+similar genes); the credit for the gene at rank $i$ that covers nugget $n$ is multiplied by
+$(1-\alpha)^{r}$, where $r$ counts how many earlier-ranked genes already covered $n$. So the
+second, third, \dots\ gene from the same mechanism earns geometrically less. The total is
+normalized against an ideal ordering so it lands in $[0,1]$. High $=$ many lethal genes
+spanning many mechanisms.
+\end{itemize}
+We report each metric as a mean $\pm$ 95\% confidence interval over cell lines and seeds, so
+differences between methods can be read as real or within noise.
+
 \section{Putting it together}
+
+\paragraph{Two distinct stages.} It is worth separating the two things a method does, which
+the steps above sometimes blur:
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item \textbf{Acquisition} (the loop): given what is measured, choose the next batch to
+measure --- UCB-greedy, EHVI, or a baseline (random / CoreSet / TypiClust). This runs for
+several rounds and produces the final \emph{measured set} $D$.
+\item \textbf{Nomination} (once, at the end): from a final GP fit on $D$, choose the
+shortlist $B$ --- apply the \emph{safety rule} (none / known-toxicity ceiling / learned
+ceiling) and then the \emph{diversity operator} (none / per-pathway cap / $k$-DPP).
+\end{itemize}
+
 \begin{algorithm}[h]
-\caption{One round of risk-aware nomination (constrained variant)}
+\caption{One round of acquisition, then final nomination}
 \begin{algorithmic}[1]
-\State Fit the efficacy GP on the measured genes; if toxicity is unknown, fit a toxicity GP too.
-\State For every unmeasured gene, predict efficacy $\hat e_i$ and toxicity $\hat t_i$ (with uncertainties).
-\State Keep only genes that clear the safety ceiling: $\mathcal{E}=\{i:\hat t_i\le\tau\}$.
-\State Build the shortlist $B$: take the highest-$\hat e_i$ genes in $\mathcal{E}$, allowing at most $c$ per pathway.
-\State (Exploration) decide which genes to \emph{measure} next via UCB / $k$-DPP / EHVI; measure them; add to the measured set.
-\State Report efficacy, toxicity, pathway concentration and dropout robustness, and recall@$k$.
+\State \textbf{Acquisition (repeat for $R$ rounds):}
+\State \quad Fit the efficacy GP on the measured genes; if toxicity is learned, fit a toxicity GP too.
+\State \quad Score unmeasured genes (UCB, or EHVI over both objectives, or a baseline rule).
+\State \quad Measure the top batch of $q$; add them to the measured set $D$.
+\State \textbf{Nomination (once):} from a final GP fit on $D$, predict $\hat e_i$ (and $\hat t_i$) for all genes.
+\State \quad Safety filter: keep $\mathcal{E}=\{i:\hat t_i\le\tau\}$ (or $\mathcal{E}=$ all genes if no safety rule).
+\State \quad Diversity operator over $\mathcal{E}$: top-$K$ by $\hat e_i$, or at most $c$ per pathway, or $k$-DPP.
+\State \textbf{Evaluate} $B$ on true efficacy, toxicity, concentration, robustness, distinct pathways, $\alpha$-NDCG.
 \end{algorithmic}
 \end{algorithm}
 
+\paragraph{The two analyses we run (the ablation).} Because safety and diversity are
+separate questions, we test them in two separate ablations rather than one tangled grid.
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item \textbf{A --- safety vs.\ efficacy.} Vary only the \emph{safety rule}: none (naive
+greedy top-$K$) $\to$ truncation (known-toxicity ceiling, Step 5) $\to$ EHVI (a
+dual-objective acquisition that \emph{learns} toxicity, Step 6, with a learned ceiling at
+nomination). Race these against the random / CoreSet / TypiClust baselines, and plot all of
+them on the efficacy--toxicity plane. Question: does a safety rule buy a better
+potency--safety trade-off than naive or diversity-first prior work?
+\item \textbf{B --- diversity / robustness.} Take a fixed base nomination (we use two: naive
+greedy, and the safety rule that won analysis A) and \emph{layer} the diversity operator on
+top: none $\to$ per-pathway cap $\to$ $k$-DPP. Question: does the operator de-concentrate
+the portfolio (lower $C$, higher $R$, more distinct pathways) without sacrificing efficacy?
+The cap is a ``bolt-on-any-method'' hedge --- it needs only the graph, so it composes with
+any base.
+\end{itemize}
+
+\paragraph{How the remaining constants are set.} None is finely tuned; each has a
+data-driven default and the conclusions are insensitive to small changes.
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item \textbf{Safety ceiling $\tau$} (default $0.5$): toxicity here is a fraction of cell
+lines in $[0,1]$, so $\tau{=}0.5$ means ``reject genes lethal in more than half of all
+lines.'' We also \emph{sweep} $\tau$ to trace the whole efficacy--safety frontier rather
+than rely on one value.
+\item \textbf{Exploration weight $\beta$} (UCB, default $2$): the usual ``two standard
+deviations'' choice --- enough exploration bonus to escape pure greed without chasing
+high-variance noise.
+\item \textbf{Monte-Carlo samples $M$} for EHVI (default $\sim$32): enough draws for the
+ranking of candidates to be stable round to round; more only slows the loop.
+\item \textbf{Shortlist size} for EHVI (default $\sim$150): EHVI is the expensive step, so we
+run it only on the most promising candidates by optimistic (UCB-style) efficacy and
+toxicity --- a genuinely front-improving gene is essentially never optimistic-poor on both
+axes, so the shortlist does not change which genes get picked, only the cost.
+\item \textbf{Loop budget} (default $n_{\text{init}}{=}40$ seed measurements, then $R{=}8$
+rounds of $q{=}10$, $\approx$120 assays): the small-budget regime active learning is for.
+$K{=}30$ targets is a realistic shortlist size to hand downstream.
+\item \textbf{Diversity pool}: the operator selects within the top $\sim$200 eligible genes
+by quality, so $k$-DPP/cap diversify \emph{among high-efficacy genes} (not the whole genome)
+and the determinant stays cheap.
+\end{itemize}
+
 In short: the \textbf{GP} gives calibrated predictions and uncertainty; the
-\textbf{acquisition functions} (UCB / $k$-DPP / EHVI) decide what to measure to learn
-fastest; the \textbf{constraint} enforces safety as a hard ceiling; the \textbf{per-pathway
-cap} hedges against pathway-level failure; and the \textbf{metrics} quantify the
-efficacy--safety--diversity trade-offs a target-nomination pipeline must navigate.
+\textbf{acquisition functions} (UCB / EHVI / baselines) decide what to measure to learn
+fastest; the \textbf{safety rule} enforces safety as a hard ceiling (known or learned); the
+\textbf{diversity operator} (per-pathway cap / $k$-DPP) hedges against pathway-level
+failure; and the \textbf{metrics} quantify the efficacy--safety--diversity trade-offs the
+two ablations are designed to expose.
 
 \begin{thebibliography}{9}
 \bibitem{rasmussen} C.~E.~Rasmussen and C.~K.~I.~Williams. \emph{Gaussian Processes for Machine Learning}. MIT Press, 2006.
