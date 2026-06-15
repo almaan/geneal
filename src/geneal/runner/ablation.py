@@ -147,8 +147,18 @@ def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
 _DIV_MODE = {"none": "greedy", "cap": "cap", "kdpp": "dpp"}
 
 
+def _tox_threshold(tox_values, tau, tau_mode):
+    """Toxicity ceiling. 'absolute' (default, biological): tau is a toxicity value
+    on the Chronos scale -- e.g. tau=0.5 keeps genes with toxicity < 0.5, i.e.
+    contrast-line effect > -0.5 (the standard 'not essential' cutoff), or common-
+    essential fraction < 0.5. 'quantile': tau is a fraction, keep the safest tau
+    of candidates (scale-free, for frontier sweeps)."""
+    return float(tau) if tau_mode == "absolute" else float(np.quantile(tox_values, tau))
+
+
 def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
-             S=None, surr_factory=None, cap=2, pool=200, joint_factory=None):
+             S=None, surr_factory=None, cap=2, pool=200, joint_factory=None,
+             tau_mode="absolute"):
     """Nominate K targets. Fit a final efficacy GP on revealed labels, predict
     genome-wide; apply the safety filter; then the diversity operator over the
     top-`pool` eligible candidates (none=top-K, cap=per-pathway, kdpp=k-DPP on S).
@@ -175,18 +185,15 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
             X[revealed], np.column_stack([eff[revealed], tox[revealed]])).predict(X)[0])
         q = m2[:, 0].astype(float).copy()
         m_tox = m2[:, 1]
-        thr = float(np.quantile(m_tox, tau))
-        q[m_tox > thr] = _NEG
+        q[m_tox > _tox_threshold(m_tox, tau, tau_mode)] = _NEG
     else:
         q = np.asarray(surr_factory().fit(X[revealed], eff[revealed]).predict(X)[0],
                        dtype=float).copy()
         if safety == "known":
-            thr = float(np.quantile(tox, tau))
-            q[tox > thr] = _NEG
+            q[tox > _tox_threshold(tox, tau, tau_mode)] = _NEG
         elif safety == "pred":
             m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0])
-            thr = float(np.quantile(m_tox, tau))
-            q[m_tox > thr] = _NEG
+            q[m_tox > _tox_threshold(m_tox, tau, tau_mode)] = _NEG
         elif safety != "none":
             raise ValueError(f"unknown safety {safety!r}")
 
@@ -207,15 +214,18 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
 # --------------------------------------------------------------------------- #
 # Evaluate (true-value metrics for a nominated portfolio)                      #
 # --------------------------------------------------------------------------- #
-def evaluate(pick, eff, tox, membership, X):
+def evaluate(pick, eff, tox, membership, X, tox_ceiling=None):
     """TRUE-value metrics for a nominated set. eff/tox are ground truth; X the
-    PubMedBERT panel embeddings (for alpha-NDCG nugget clustering)."""
+    PubMedBERT panel embeddings (for alpha-NDCG nugget clustering). If
+    `tox_ceiling` is given, also count nominees whose TRUE toxicity is at/below
+    (safe) vs above (toxic) the ceiling -- a direct count of how many of the K
+    picks are actually tolerable."""
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
     pick = list(pick)
     # alpha-NDCG over the picks ordered by true efficacy (deterministic)
     order = sorted(pick, key=lambda g: -eff[g])
     andcg = AlphaNDCG(k=len(pick) or 1).evaluate(order, eff, np.asarray(X, float))
-    return {
+    out = {
         "mean_efficacy": float(np.mean(eff[pick])),
         "max_efficacy": float(np.max(eff[pick])),
         "mean_toxicity": float(np.mean(tox[pick])),
@@ -227,6 +237,14 @@ def evaluate(pick, eff, tox, membership, X):
         "n_pathways": int(n_pathways_covered(pick, membership)),
         "alpha_ndcg": float(andcg),
     }
+    if tox_ceiling is not None:
+        pe = np.asarray(pick)
+        safe = tox[pe] <= tox_ceiling
+        out["n_toxic"] = int(np.sum(~safe))
+        out["n_safe"] = int(np.sum(safe))
+        # mean efficacy among PERMISSIBLE picks (below the safety ceiling)
+        out["mean_efficacy_safe"] = float(np.mean(eff[pe[safe]])) if safe.any() else float("nan")
+    return out
 
 
 # --------------------------------------------------------------------------- #

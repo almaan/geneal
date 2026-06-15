@@ -56,16 +56,35 @@ def test_run_acquisition_deterministic():
     assert set(g) == set(r)                           # n_rounds=0 -> just init
 
 
-def test_nominate_known_respects_quantile_ceiling():
+def test_nominate_known_absolute_ceiling():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    tau = 0.6
+    # default tau_mode='absolute': keep genes with KNOWN toxicity <= tau
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="known",
+                   diversity="none", tau=tau, surr_factory=_factory)
+    assert len(sel) == 6
+    assert all(tox[i] <= tau + 1e-9 for i in sel)
+
+
+def test_nominate_known_quantile_ceiling():
     X, eff, tox, membership = _toy()
     rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
     tau = 0.6
     sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="known",
-                   diversity="none", tau=tau, surr_factory=_factory)
-    assert len(sel) == 6
-    # 'known' filters on the known-toxicity tau-QUANTILE -> picks below that ceiling
+                   diversity="none", tau=tau, surr_factory=_factory, tau_mode="quantile")
     thr = float(np.quantile(tox, tau))
     assert all(tox[i] <= thr + 1e-9 for i in sel)
+
+
+def test_evaluate_safety_counts():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="none",
+                   diversity="none", tau=1.0, surr_factory=_factory)
+    m = evaluate(sel, eff, tox, membership, X, tox_ceiling=0.5)
+    assert m["n_safe"] + m["n_toxic"] == len(sel)
+    assert "mean_efficacy_safe" in m
 
 
 def test_nominate_pred_safety_runs():

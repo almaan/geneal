@@ -1,53 +1,64 @@
 # src/geneal/report/ablation_report.py
-"""Default two-analysis ablation report (geneal Plan 7, revision v2).
+"""Default two-analysis ablation report (geneal Plan 7).
 
-Faceted by toxicity definition (contrast line = primary; aggregate common-
-essential = baseline). For each:
+Static, publication-style figures (matplotlib, no gridlines, no interactivity),
+embedded as PNG in a self-contained HTML and optionally saved as vector PDF+PNG.
+Faceted by toxicity definition (contrast line = primary; aggregate = baseline).
 
-  Section A -- safety vs efficacy: 7 methods (greedy / trunc_known / trunc_pred /
-    ehvi + random / farthest / cluster) as points on the efficacy-toxicity
-    tradeoff, with an aggregate panel AND a per-cell-line subplot grid (manuscript
-    subfigures), plus a method table.
-
+  Section A -- safety vs efficacy: 8 methods on the efficacy-toxicity tradeoff
+    (aggregate + per-cell-line subfigures), each plot showing the dashed tau
+    TOXICITY CEILING; plus per-method gene-landscape clouds (aggregate + per line)
+    and a method table.
   Section B -- diversity / robustness: operators (none/cap/kdpp) on three bases
-    (greedy / truncation / ehvi): metric grid, concentration/robustness bar,
+    (greedy/truncation/ehvi): metric table, concentration/robustness bar, and
     efficacy-vs-concentration.
 
-Publication-grade plotly styling; key figures also exported as vector PDF + PNG
-to <fig_dir> (via kaleido, if available)."""
+The tau ceiling is a QUANTILE of the candidate toxicity distribution (tau=0.5 =
+the safest half); for a single contrast reference line it is
+quantile({-effect in the contrast line}, tau)."""
 from __future__ import annotations
-from pathlib import Path
+import base64
+import io
 import math
+from pathlib import Path
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from jinja2 import Environment, BaseLoader
 
-# ---- publication palette + typography ----------------------------------------
-FONT = "Inter, 'Helvetica Neue', Arial, sans-serif"
-INK = "#1f2933"
-GRID = "#e8ebef"
+plt.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["DejaVu Sans", "Helvetica", "Arial"],
+    "axes.edgecolor": "#444a52", "axes.linewidth": 0.9,
+    "axes.titlesize": 11, "axes.labelsize": 10,
+    "xtick.labelsize": 9, "ytick.labelsize": 9,
+    "figure.dpi": 120, "savefig.dpi": 120, "svg.fonttype": "none",
+})
+
 COLORS = {
     "greedy": "#d1495b", "trunc_known": "#2e6f95", "trunc_pred": "#7eb6d9",
-    "ehvi": "#1b9e77", "random": "#9aa0a6", "farthest": "#8e6fb0",
-    "cluster": "#e0a32e", "info_div": "#c2548a",
+    "ehvi": "#9aa0a6", "ehvi_trunc": "#1b9e77", "random": "#b0b6bd",
+    "farthest": "#8e6fb0", "cluster": "#e0a32e", "info_div": "#c2548a",
 }
 LABELS = {
     "greedy": "greedy (no safety)", "trunc_known": "truncation · known tox",
-    "trunc_pred": "truncation · predicted tox", "ehvi": "EHVI (learned)",
-    "random": "random", "farthest": "farthest (coverage)", "cluster": "cluster (density)",
+    "trunc_pred": "truncation · predicted tox", "ehvi": "EHVI (no truncation)",
+    "ehvi_trunc": "EHVI + τ truncation", "random": "random",
+    "farthest": "farthest (coverage)", "cluster": "cluster (density)",
     "info_div": "info-diverse (IterPert-like)",
 }
-A_ORDER = ["greedy", "trunc_known", "trunc_pred", "ehvi", "random", "farthest",
-           "cluster", "info_div"]
+A_ORDER = ["greedy", "trunc_known", "trunc_pred", "ehvi", "ehvi_trunc", "random",
+           "farthest", "cluster", "info_div"]
 OP_ORDER = ["none", "cap", "kdpp"]
-OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp": "#1b9e77"}
-B_BASE_ORDER = ["greedy", "truncation", "ehvi"]
-B_BASE_COLOR = {"greedy": "#d1495b", "truncation": "#2e6f95", "ehvi": "#1b9e77"}
+B_BASE_ORDER = ["greedy", "truncation", "ehvi_trunc"]
+B_BASE_COLOR = {"greedy": "#d1495b", "truncation": "#2e6f95", "ehvi_trunc": "#1b9e77"}
 
-_A_METRICS = [("mean_efficacy", "Mean efficacy"), ("max_efficacy", "Max efficacy"),
-              ("mean_toxicity", "Mean toxicity")]
+_A_METRICS = [("mean_efficacy", "Mean efficacy"),
+              ("mean_efficacy_safe", "Mean efficacy (permissible)"),
+              ("max_efficacy", "Max efficacy"), ("mean_toxicity", "Mean toxicity"),
+              ("n_safe", "# safe (of K)")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
               ("n_pathways", "Distinct pathways↑"), ("alpha_ndcg", "α-NDCG↑"),
               ("mean_efficacy", "Mean efficacy↑")]
@@ -58,128 +69,118 @@ def _ci(x):
     return m, (0.0 if n < 2 else 1.96 * float(x.std(ddof=1)) / np.sqrt(n))
 
 
-def _style(fig, height=480, legend_bottom=True):
-    fig.update_layout(
-        font=dict(family=FONT, size=14, color=INK),
-        plot_bgcolor="white", paper_bgcolor="white",
-        height=height, margin=dict(l=72, r=28, t=30, b=84 if legend_bottom else 56),
-        colorway=list(COLORS.values()))
-    fig.update_xaxes(showgrid=True, gridcolor=GRID, zeroline=False,
-                     linecolor="#c7ccd1", ticks="outside", tickcolor="#c7ccd1")
-    fig.update_yaxes(showgrid=True, gridcolor=GRID, zeroline=False,
-                     linecolor="#c7ccd1", ticks="outside", tickcolor="#c7ccd1")
-    if legend_bottom:
-        fig.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.16,
-                                      xanchor="left", x=0, font=dict(size=12)))
-    return fig
+def _despine(ax):
+    ax.grid(False)
+    for s in ("top", "right"):
+        ax.spines[s].set_visible(False)
 
 
-def _export(fig, fig_dir, name):
-    """Write a vector PDF + PNG for manuscript use (kaleido). Silently skip if
-    kaleido is unavailable."""
-    if fig_dir is None:
-        return
-    try:
+def _ceiling(scatter, src, tau, tau_mode="absolute", cell_line=None):
+    """The toxicity ceiling for the dashed line. 'absolute': the bar IS tau (a
+    Chronos-scale value). 'quantile': tau-quantile of the candidate true-toxicity
+    distribution. Returns None if no scatter data."""
+    if tau_mode == "absolute":
+        return float(tau)
+    if scatter is None or scatter.empty:
+        return None
+    d = scatter[scatter.tox_source == src] if "tox_source" in scatter.columns else scatter
+    if cell_line is not None:
+        d = d[d.cell_line == cell_line]
+    if d.empty:
+        return None
+    return float(np.quantile(d["toxicity"].to_numpy(), tau))
+
+
+def _emit(fig, fig_dir, name):
+    """Embed the figure as a base64 PNG <img>; also save PDF+PNG when fig_dir set."""
+    if fig_dir is not None:
         fig_dir = Path(fig_dir); fig_dir.mkdir(parents=True, exist_ok=True)
-        fig.write_image(str(fig_dir / f"{name}.pdf"))
-        fig.write_image(str(fig_dir / f"{name}.png"), scale=2)
-    except Exception:
-        pass
-
-
-def _html(fig):
-    return fig.to_html(full_html=False, include_plotlyjs="cdn",
-                       config={"displayModeBar": False})
+        fig.savefig(fig_dir / f"{name}.pdf", bbox_inches="tight")
+        fig.savefig(fig_dir / f"{name}.png", bbox_inches="tight")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f'<img src="data:image/png;base64,{b64}" style="max-width:100%;height:auto"/>'
 
 
 # ---- Section A ---------------------------------------------------------------
-def _tradeoff_points(d, src, fig_dir):
-    """Aggregate efficacy-toxicity tradeoff: 7 methods as points (mean over lines
-    x seeds) with 95% CI bars. Up-left = safer & more lethal."""
-    methods = [m for m in A_ORDER if m in set(d.method)]
-    fig = go.Figure()
+def _draw_tradeoff(ax, d, methods, ceiling, tau, legend=True):
     for m in methods:
         g = d[d.method == m]
+        if not len(g):
+            continue
         ex, exc = _ci(g["mean_toxicity"]); ey, eyc = _ci(g["mean_efficacy"])
-        fig.add_trace(go.Scatter(
-            x=[ex], y=[ey], mode="markers", name=LABELS.get(m, m),
-            error_x=dict(type="data", array=[exc], thickness=1.3, width=5, color=COLORS.get(m)),
-            error_y=dict(type="data", array=[eyc], thickness=1.3, width=5, color=COLORS.get(m)),
-            marker=dict(size=15, color=COLORS.get(m, "#444"),
-                        line=dict(width=1.4, color="white"))))
-    fig.add_annotation(x=0.01, y=0.99, xref="paper", yref="paper",
-                       text="◤ safer &amp; more lethal", showarrow=False,
-                       font=dict(color="#127a4f", size=13), xanchor="left", yanchor="top")
-    _style(fig, height=520)
-    fig.update_layout(xaxis_title="mean toxicity of nominees  (← safer)",
-                      yaxis_title="mean efficacy (lethality)  (↑ more potent)")
-    _export(fig, fig_dir, f"tradeoff_{src}")
-    return _html(fig)
+        ax.errorbar(ex, ey, xerr=exc, yerr=eyc, fmt="o", ms=9, color=COLORS.get(m, "#444"),
+                    ecolor=COLORS.get(m, "#444"), elinewidth=1.1, capsize=2.5,
+                    mec="white", mew=1.0, label=LABELS.get(m, m), zorder=3)
+    if ceiling is not None:
+        ax.axvline(ceiling, ls="--", lw=1.1, color="#6b7280", zorder=1)
+        ax.text(ceiling, ax.get_ylim()[1], f" τ ceiling ({tau:g})", color="#6b7280",
+                fontsize=8, va="top", ha="left")
+    _despine(ax)
+    ax.set_xlabel("mean toxicity  (← safer)")
+    ax.set_ylabel("mean efficacy  (↑ more potent)")
+    if legend:
+        ax.legend(frameon=False, fontsize=8, loc="upper right", ncol=2)
 
 
-def _tradeoff_per_line(d, src, lines, fig_dir):
-    """Per-cell-line tradeoff subplot grid (manuscript subfigures): one panel per
-    line, the 7 methods as points (mean over seeds)."""
-    lines = [l for l in lines if l in set(d.cell_line)]
+def _tradeoff_points(dA, src, scatter, tau, tau_mode, fig_dir):
+    methods = [m for m in A_ORDER if m in set(dA.method)]
+    fig, ax = plt.subplots(figsize=(7.2, 5.2))
+    _draw_tradeoff(ax, dA, methods, _ceiling(scatter, src, tau, tau_mode), tau)
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"tradeoff_{src}")
+
+
+def _tradeoff_per_line(dA, src, lines, scatter, tau, tau_mode, fig_dir):
+    lines = [l for l in (lines or []) if l in set(dA.cell_line)] or sorted(dA.cell_line.unique())
     if not lines:
         return None
+    methods = [m for m in A_ORDER if m in set(dA.method)]
     ncol = min(3, len(lines)); nrow = math.ceil(len(lines) / ncol)
-    fig = make_subplots(rows=nrow, cols=ncol, subplot_titles=lines,
-                        horizontal_spacing=0.07, vertical_spacing=0.12)
-    methods = [m for m in A_ORDER if m in set(d.method)]
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4.4 * ncol, 3.6 * nrow), squeeze=False)
     for k, cl in enumerate(lines):
-        r, c = k // ncol + 1, k % ncol + 1
-        dl = d[d.cell_line == cl]
-        for m in methods:
-            g = dl[dl.method == m]
-            if not len(g):
-                continue
-            ex, exc = _ci(g["mean_toxicity"]); ey, eyc = _ci(g["mean_efficacy"])
-            fig.add_trace(go.Scatter(
-                x=[ex], y=[ey], mode="markers", name=LABELS.get(m, m),
-                legendgroup=m, showlegend=(k == 0),
-                error_x=dict(type="data", array=[exc], thickness=1, width=3, color=COLORS.get(m)),
-                error_y=dict(type="data", array=[eyc], thickness=1, width=3, color=COLORS.get(m)),
-                marker=dict(size=11, color=COLORS.get(m, "#444"),
-                            line=dict(width=1, color="white"))), row=r, col=c)
-    _style(fig, height=300 * nrow)
-    fig.update_xaxes(title_text="toxicity →", title_font=dict(size=11))
-    fig.update_yaxes(title_text="efficacy ↑", title_font=dict(size=11))
-    for ann in fig.layout.annotations:
-        ann.font = dict(size=13, family=FONT, color=INK)
-    _export(fig, fig_dir, f"tradeoff_perline_{src}")
-    return _html(fig)
+        ax = axes[k // ncol][k % ncol]
+        _draw_tradeoff(ax, dA[dA.cell_line == cl], methods,
+                       _ceiling(scatter, src, tau, tau_mode, cell_line=cl), tau, legend=False)
+        ax.set_title(cl)
+    for k in range(len(lines), nrow * ncol):
+        axes[k // ncol][k % ncol].axis("off")
+    # one shared legend
+    handles = [plt.Line2D([0], [0], marker="o", ls="", ms=8, color=COLORS.get(m), label=LABELS.get(m, m))
+               for m in methods]
+    fig.legend(handles=handles, frameon=False, fontsize=8, loc="lower center",
+               ncol=min(4, len(methods)), bbox_to_anchor=(0.5, -0.04))
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"tradeoff_perline_{src}")
 
 
-def _cloud_fig(d, methods, fig_dir, name):
-    """One gene-landscape figure: a panel per method. Grey = all candidate genes
-    (toxicity x, efficacy y); coloured open circles = that method's nominated
-    targets. `d` is already filtered (one line, or all lines pooled)."""
+def _cloud_fig(d, methods, ceiling, fig_dir, name):
     tox, eff = d["toxicity"].to_numpy(), d["efficacy"].to_numpy()
     ncol = min(4, len(methods)); nrow = math.ceil(len(methods) / ncol)
-    fig = make_subplots(rows=nrow, cols=ncol,
-                        subplot_titles=[LABELS.get(m, m) for m in methods],
-                        horizontal_spacing=0.05, vertical_spacing=0.13)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3.3 * ncol, 2.9 * nrow), squeeze=False)
     for k, m in enumerate(methods):
-        r, c = k // ncol + 1, k % ncol + 1
-        fig.add_trace(go.Scatter(x=tox, y=eff, mode="markers", showlegend=False,
-                      marker=dict(size=2.5, color="#dfe3e8"), hoverinfo="skip"), row=r, col=c)
+        ax = axes[k // ncol][k % ncol]
+        ax.scatter(tox, eff, s=3, c="#dfe3e8", linewidths=0, rasterized=True, zorder=1)
         pk = d[f"pick_{m}"].to_numpy(dtype=bool)
-        fig.add_trace(go.Scatter(x=tox[pk], y=eff[pk], mode="markers", showlegend=False,
-                      marker=dict(size=8, color=COLORS.get(m, "#444"), symbol="circle-open",
-                                  line=dict(width=1.6, color=COLORS.get(m, "#444")))),
-                      row=r, col=c)
-    _style(fig, height=250 * nrow, legend_bottom=False)
-    fig.update_xaxes(title_text="toxicity →", title_font=dict(size=10))
-    fig.update_yaxes(title_text="efficacy ↑", title_font=dict(size=10))
-    for ann in fig.layout.annotations:
-        ann.font = dict(size=12, family=FONT, color=INK)
-    _export(fig, fig_dir, name)
-    return _html(fig)
+        ax.scatter(tox[pk], eff[pk], s=34, facecolors="none",
+                   edgecolors=COLORS.get(m, "#444"), linewidths=1.4, zorder=3)
+        if ceiling is not None:
+            ax.axvline(ceiling, ls="--", lw=1.0, color="#6b7280", zorder=2)
+        _despine(ax)
+        ax.set_title(LABELS.get(m, m), fontsize=9)
+        if k // ncol == nrow - 1:
+            ax.set_xlabel("toxicity →", fontsize=8)
+        if k % ncol == 0:
+            ax.set_ylabel("efficacy ↑", fontsize=8)
+    for k in range(len(methods), nrow * ncol):
+        axes[k // ncol][k % ncol].axis("off")
+    fig.tight_layout()
+    return _emit(fig, fig_dir, name)
 
 
-def _gene_cloud_section(scatter, src, lines, fig_dir):
-    """Aggregate (all lines pooled) gene-landscape cloud + one per cell line."""
+def _gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir):
     if scatter is None or scatter.empty:
         return None
     d = scatter[scatter.tox_source == src] if "tox_source" in scatter.columns else scatter
@@ -188,22 +189,44 @@ def _gene_cloud_section(scatter, src, lines, fig_dir):
     methods = [m for m in A_ORDER if f"pick_{m}" in d.columns]
     if not methods:
         return None
-    agg = _cloud_fig(d, methods, fig_dir, f"gene_cloud_{src}")
+    agg = _cloud_fig(d, methods, _ceiling(scatter, src, tau, tau_mode), fig_dir, f"gene_cloud_{src}")
     cl_order = [c for c in (lines or []) if c in set(d.cell_line)] or sorted(d.cell_line.unique())
-    per = [(cl, _cloud_fig(d[d.cell_line == cl], methods, fig_dir, f"gene_cloud_{src}_{cl}"))
+    per = [(cl, _cloud_fig(d[d.cell_line == cl], methods,
+                           _ceiling(scatter, src, tau, tau_mode, cell_line=cl),
+                           fig_dir, f"gene_cloud_{src}_{cl}"))
            for cl in cl_order]
     return {"agg": agg, "per": per}
 
 
 def _table_A(d):
     methods = [m for m in A_ORDER if m in set(d.method)]
+    metrics = [(c, lbl) for c, lbl in _A_METRICS if c in d.columns]
     rows = []
     for m in methods:
-        cells = []
-        for col, _ in _A_METRICS:
-            mn, ci = _ci(d[d.method == m][col]); cells.append(f"{mn:.3f} ± {ci:.3f}")
+        cells = [f"{_ci(d[d.method == m][c])[0]:.3f} ± {_ci(d[d.method == m][c])[1]:.3f}"
+                 for c, _ in metrics]
         rows.append({"m": LABELS.get(m, m), "cells": cells})
-    return [lbl for _, lbl in _A_METRICS], rows
+    return [lbl for _, lbl in metrics], rows
+
+
+def _safety_bar(dA, src, fig_dir):
+    """Per method: # of the K nominees that are SAFE (true tox <= ceiling) vs
+    TOXIC (above), stacked. Mean over lines x seeds."""
+    if "n_safe" not in dA.columns:
+        return None
+    methods = [m for m in A_ORDER if m in set(dA.method)]
+    safe = [_ci(dA[dA.method == m]["n_safe"])[0] for m in methods]
+    toxic = [_ci(dA[dA.method == m]["n_toxic"])[0] for m in methods]
+    x = np.arange(len(methods))
+    fig, ax = plt.subplots(figsize=(max(6, 0.95 * len(methods)), 4.2))
+    ax.bar(x, safe, 0.62, color="#1b9e77", label="permissible (tox ≤ τ)")
+    ax.bar(x, toxic, 0.62, bottom=safe, color="#d1495b", label="over threshold (tox > τ)")
+    ax.set_xticks(x); ax.set_xticklabels([LABELS.get(m, m) for m in methods],
+                                          rotation=30, ha="right", fontsize=8)
+    _despine(ax); ax.set_ylabel("nominees (count of K)")
+    ax.legend(frameon=False, fontsize=9, loc="upper right")
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"safety_count_{src}")
 
 
 # ---- Section B ---------------------------------------------------------------
@@ -215,7 +238,7 @@ def _b_table(d):
             g = d[(d.base == base) & (d.operator == op)]
             if not len(g):
                 continue
-            cells = [f"{_ci(g[col])[0]:.3f} ± {_ci(g[col])[1]:.3f}" for col, _ in _B_METRICS]
+            cells = [f"{_ci(g[c])[0]:.3f} ± {_ci(g[c])[1]:.3f}" for c, _ in _B_METRICS]
             rows.append({"label": f"{base} + {op}", "cells": cells})
     return cols, rows
 
@@ -229,38 +252,39 @@ def _b_bar(d, src, fig_dir):
             if len(g):
                 labels.append(f"{b}+{op}"); conc.append(_ci(g["concentration"])[0])
                 rob.append(_ci(g["robustness"])[0])
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=labels, y=conc, name="concentration ↓", marker_color="#d1495b"))
-    fig.add_trace(go.Bar(x=labels, y=rob, name="robustness ↑", marker_color="#1b9e77"))
-    _style(fig, height=430)
-    fig.update_layout(barmode="group", yaxis_title="metric value")
-    fig.update_xaxes(tickangle=-30)
-    _export(fig, fig_dir, f"diversity_bar_{src}")
-    return _html(fig)
+    x = np.arange(len(labels)); w = 0.4
+    fig, ax = plt.subplots(figsize=(max(6, 0.8 * len(labels)), 4.2))
+    ax.bar(x - w / 2, conc, w, color="#d1495b", label="concentration ↓")
+    ax.bar(x + w / 2, rob, w, color="#1b9e77", label="robustness ↑")
+    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=30, ha="right")
+    _despine(ax); ax.set_ylabel("metric value")
+    ax.legend(frameon=False, fontsize=9)
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"diversity_bar_{src}")
 
 
 def _b_eff_conc(d, src, fig_dir):
     bases = [b for b in B_BASE_ORDER if b in set(d.base)]
-    sym = {"none": "circle", "cap": "square", "kdpp": "diamond"}
-    fig = go.Figure()
+    marker = {"none": "o", "cap": "s", "kdpp": "D"}
+    fig, ax = plt.subplots(figsize=(6.4, 4.6))
     for b in bases:
-        xs, ys, txt = [], [], []
+        xs, ys = [], []
         for op in OP_ORDER:
             g = d[(d.base == b) & (d.operator == op)]
             if not len(g):
                 continue
-            xs.append(_ci(g["concentration"])[0]); ys.append(_ci(g["mean_efficacy"])[0]); txt.append(op)
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines+markers+text", text=txt,
-                      textposition="top center", name=b,
-                      line=dict(color=B_BASE_COLOR.get(b, "#444"), dash="dot", width=1.5),
-                      marker=dict(size=13, color=B_BASE_COLOR.get(b, "#444"),
-                                  symbol=[sym.get(t, "circle") for t in txt],
-                                  line=dict(width=1, color="white"))))
-    _style(fig, height=470)
-    fig.update_layout(xaxis_title="pathway concentration  (← better hedged)",
-                      yaxis_title="mean efficacy  (↑ more potent)")
-    _export(fig, fig_dir, f"eff_vs_conc_{src}")
-    return _html(fig)
+            xc, yc = _ci(g["concentration"])[0], _ci(g["mean_efficacy"])[0]
+            xs.append(xc); ys.append(yc)
+            ax.scatter(xc, yc, s=70, marker=marker.get(op, "o"),
+                       color=B_BASE_COLOR.get(b, "#444"), edgecolors="white", linewidths=1, zorder=3)
+            ax.annotate(op, (xc, yc), fontsize=8, xytext=(0, 6), textcoords="offset points", ha="center")
+        ax.plot(xs, ys, ls=":", lw=1.2, color=B_BASE_COLOR.get(b, "#444"), label=b, zorder=2)
+    _despine(ax)
+    ax.set_xlabel("pathway concentration  (← better hedged)")
+    ax.set_ylabel("mean efficacy  (↑ more potent)")
+    ax.legend(frameon=False, fontsize=9, title="base")
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"eff_vs_conc_{src}")
 
 
 # ---- headlines ---------------------------------------------------------------
@@ -273,9 +297,10 @@ def _headline_A(d):
         f"efficacy {mof('greedy','mean_efficacy'):.2f}. The <b>known-toxicity ceiling</b> "
         f"(trunc_known) reaches toxicity {mof('trunc_known','mean_toxicity'):.2f} / efficacy "
         f"{mof('trunc_known','mean_efficacy'):.2f}; the <b>learned</b> ceilings "
-        f"(trunc_pred {mof('trunc_pred','mean_toxicity'):.2f}, EHVI "
-        f"{mof('ehvi','mean_toxicity'):.2f}) sit between — the gap to trunc_known is the "
-        f"price of learning safety from the embedding."
+        f"(trunc_pred {mof('trunc_pred','mean_toxicity'):.2f}, EHVI+trunc "
+        f"{mof('ehvi_trunc','mean_toxicity'):.2f}) sit between — the gap to trunc_known is the "
+        f"price of learning safety from the embedding. (Untruncated EHVI baseline: "
+        f"tox {mof('ehvi','mean_toxicity'):.2f}.)"
     )
 
 
@@ -302,16 +327,21 @@ _FACET_TMPL = """
 <h2>Toxicity definition: <span style="color:#2e6f95">{{ src }}</span>{{ primary }}</h2>
 
 <h3>A &middot; Safety vs efficacy — all methods</h3>
-<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer; the up-left corner is the goal.</div>
-<div class="card">{{ tradeoff }}</div>
+<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer. Dashed line = the τ toxicity ceiling (quantile {{ tau }} of candidate toxicity).</div>
+<div class="card">{{ tradeoff|safe }}</div>
+{% if safety_bar %}
+<h3>A &middot; Permissible vs over-threshold targets</h3>
+<div class="note">For each method, how many of the K nominees have TRUE toxicity below (permissible) vs above the τ ceiling. The naive/diversity baselines nominate many over-threshold (toxic) targets; the safety rules keep them permissible.</div>
+<div class="card">{{ safety_bar|safe }}</div>
+{% endif %}
 {% if perline %}
-<h3>A &middot; Per-cell-line tradeoff (manuscript subfigures)</h3>
-<div class="note">One panel per cell line; the same methods. Shows the safety ordering is consistent across lines, not an averaging artifact.</div>
-<div class="card">{{ perline }}</div>
+<h3>A &middot; Per-cell-line tradeoff</h3>
+<div class="note">One panel per cell line; the same methods; each with its own τ ceiling. The safety ordering holds across lines.</div>
+<div class="card">{{ perline|safe }}</div>
 {% endif %}
 {% if cloud %}
 <h3>A &middot; Gene landscape — nominated targets per method (all lines pooled)</h3>
-<div class="note">Each panel a method. Grey = all candidate genes (pooled over the {{ n_lines }} cell lines); open circles = that method's {{ cloudK }} nominated targets. Safety rules pull picks left (safer); greedy/baselines reach into the toxic right.</div>
+<div class="note">Each panel a method. Grey = all candidate genes (pooled over {{ n_lines }} lines); open circles = that method's {{ cloudK }} targets; dashed line = τ ceiling. Safety rules pull picks left of the ceiling.</div>
 <div class="card">{{ cloud.agg|safe }}</div>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ per-cell-line gene landscapes ({{ cloud.per|length }})</summary>
 {% for cl, c in cloud.per %}
@@ -333,10 +363,10 @@ _FACET_TMPL = """
 <thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in b_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table></div>
-<div class="card">{{ b_bar }}</div>
+<div class="card">{{ b_bar|safe }}</div>
 <h3>B &middot; Efficacy vs concentration</h3>
 <div class="note">Each line a base; markers are operators none→cap→kdpp. Left = better hedged; high = efficacy retained.</div>
-<div class="card">{{ b_eff_conc }}</div>
+<div class="card">{{ b_eff_conc|safe }}</div>
 """
 
 _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
@@ -356,7 +386,7 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  .gloss{background:#fff;border:1px solid #e8ebef;border-radius:11px;padding:.9rem 1.2rem;font-size:.92rem}
 </style></head><body>
 <h1>{{ title }}</h1>
-<div class="sub">{{ meta.n_genes }} genes ({{ panel_label }}) &middot; {{ n_lines }} cell lines &middot; {{ n_seeds }} seeds &middot; K={{ meta.K }} &middot; AL {{ meta.n_rounds }}×{{ meta.batch }} &middot; τ-quantile={{ meta.tau }} &middot; contrast line {{ meta.contrast_line }} &middot; acq={{ meta.acq_score }}</div>
+<div class="sub">{{ meta.n_genes }} genes ({{ panel_label }}) &middot; {{ n_lines }} cell lines &middot; {{ n_seeds }} seeds &middot; K={{ meta.K }} &middot; AL {{ meta.n_rounds }}×{{ meta.batch }} &middot; τ-quantile={{ meta.tau }} &middot; contrast line {{ meta.contrast_line }} &middot; acq={{ meta.acq_score }}{% if meta.joint_gp %} &middot; JOINT GP{% endif %}</div>
 
 <h2>How to read this</h2>
 <div class="gloss">{{ glossary|safe }}</div>
@@ -370,10 +400,9 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 _GLOSSARY = """
 <b>Two analyses, two questions, two toxicity definitions.</b><br><br>
 <b>Safety rules (Analysis A).</b>
-&bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>truncation · known</b>: keep the safest τ-fraction by the <i>known</i> toxicity (oracle ceiling). &bull; <b>truncation · predicted</b>: same, but toxicity is <i>learned</i> by a GP from revealed labels (greedy acquisition). &bull; <b>EHVI</b>: learned toxicity, with a dual-objective EHVI <i>acquisition</i>. &bull; <b>random / farthest / cluster</b>: diversity-first baselines (no safety). <i>trunc_known is the upper limit the learned rules chase — their gap is the cost of learning safety.</i><br><br>
-<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>cap</b>: ≤ c per CORUM pathway. &bull; <b>kdpp</b>: quality-weighted k-DPP with a dense embedding-cosine (mechanism) similarity — <i>never outcome similarity</i>. Layered on three bases (greedy / truncation / ehvi).<br><br>
-<b>Toxicity definitions.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast cell line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line (leakage-safe). τ is a quantile (the safest fraction kept), so it is comparable across both.<br><br>
-<b>Metrics</b> (true values of the nominated portfolio): mean/max efficacy, mean toxicity; pathway concentration↓, dropout robustness↑, distinct pathways↑, α-NDCG↑.
+&bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>truncation · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>truncation · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>trunc_known is the limit the learned rules chase.</i><br><br>
+<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>cap</b>: ≤ c per CORUM pathway. &bull; <b>kdpp</b>: quality-weighted k-DPP with a dense embedding-cosine (mechanism) similarity — <i>never outcome similarity</i>. Layered on three bases.<br><br>
+<b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).
 """
 
 
@@ -383,6 +412,8 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
     meta = meta or {}
     lines = meta.get("lines") or sorted(df.cell_line.unique())
     kdpp_sim = meta.get("kdpp_sim", "embedding")
+    tau = float(meta.get("tau", 0.5))
+    tau_mode = meta.get("tau_mode", "absolute")
     tox_sources = [s for s in (meta.get("tox_sources") or ["contrast", "aggregate"])
                    if s in set(df.tox_source)] or sorted(df.tox_source.unique())
 
@@ -391,12 +422,13 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
         d = df[df.tox_source == src]
         dA, dB = d[d.analysis == "A"], d[d.analysis == "B"]
         a_cols, a_rows = _table_A(dA); b_cols, b_rows = _b_table(dB)
-        cloud = _gene_cloud_section(scatter, src, lines, fig_dir)
         block = Environment(loader=BaseLoader()).from_string(_FACET_TMPL).render(
-            src=src, primary=" (primary)" if src == "contrast" else "",
-            tradeoff=_tradeoff_points(dA, src, fig_dir),
-            perline=_tradeoff_per_line(dA, src, lines, fig_dir),
-            cloud=cloud, cloudK=meta.get("K", ""), n_lines=df.cell_line.nunique(),
+            src=src, primary=" (primary)" if src == "contrast" else "", tau=tau,
+            tradeoff=_tradeoff_points(dA, src, scatter, tau, tau_mode, fig_dir),
+            safety_bar=_safety_bar(dA, src, fig_dir),
+            perline=_tradeoff_per_line(dA, src, lines, scatter, tau, tau_mode, fig_dir),
+            cloud=_gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir),
+            cloudK=meta.get("K", ""), n_lines=df.cell_line.nunique(),
             a_cols=a_cols, a_rows=a_rows, headline_b=_headline_B(dB),
             kdpp_sim=kdpp_sim, b_cols=b_cols, b_rows=b_rows,
             b_bar=_b_bar(dB, src, fig_dir), b_eff_conc=_b_eff_conc(dB, src, fig_dir))

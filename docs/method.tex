@@ -531,10 +531,16 @@ any base.
 \paragraph{How the remaining constants are set.} None is finely tuned; each has a
 data-driven default and the conclusions are insensitive to small changes.
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
-\item \textbf{Safety ceiling $\tau$} (default $0.5$): toxicity here is a fraction of cell
-lines in $[0,1]$, so $\tau{=}0.5$ means ``reject genes lethal in more than half of all
-lines.'' We also \emph{sweep} $\tau$ to trace the whole efficacy--safety frontier rather
-than rely on one value.
+\item \textbf{Safety ceiling $\tau$} (default $0.5$, \emph{absolute}): an absolute toxicity
+bar on the Chronos scale, chosen so it is biologically meaningful under \emph{both} toxicity
+definitions. For the contrast line, toxicity $=-\mathrm{effect}$, so $\tau{=}0.5$ keeps genes
+with $\mathrm{effect}>-0.5$ --- the standard DepMap ``not essential in this line'' cutoff.
+For the common-essential definition (a fraction in $[0,1]$), $\tau{=}0.5$ means ``lethal in
+fewer than half of all lines.'' We prefer this absolute bar over a \emph{quantile} ceiling
+(``keep the safest $\tau$ fraction'') because a quantile is relative --- it would keep a
+fixed fraction even if every candidate were toxic --- whereas the absolute bar encodes a
+real tolerability threshold. A quantile mode is available for \emph{sweeping} the
+efficacy--safety frontier, where scale-free comparability is the point.
 \item \textbf{Exploration weight $\beta$} (UCB, default $2$): the usual ``two standard
 deviations'' choice --- enough exploration bonus to escape pure greed without chasing
 high-variance noise.

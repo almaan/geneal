@@ -36,14 +36,15 @@ from geneal.data.depmap import load_gene_effect, parse_entrez
 from geneal.data.selective import (build_selective_dataset, corum_membership,
                                    toxicity_vector, rank_contrast_lines)
 from geneal.runner.ablation import (run_acquisition, nominate, evaluate,
-                                    build_string_S, build_embedding_S)
+                                    build_string_S, build_embedding_S, _tox_threshold)
 
 # Analysis A: (label, acquisition, safety-filter). diversity = none.
 ANALYSIS_A = [
     ("greedy",       "greedy",   "none"),   # naive top-K efficacy
     ("trunc_known",  "greedy",   "known"),  # known-toxicity ceiling (oracle limit)
     ("trunc_pred",   "greedy",   "pred"),   # learned-toxicity ceiling, greedy acq
-    ("ehvi",         "ehvi",     "pred"),   # dual-objective AL + learned ceiling
+    ("ehvi",         "ehvi",     "none"),   # BASELINE: EHVI acq, learned tox, NO truncation
+    ("ehvi_trunc",   "ehvi",     "pred"),   # EHVI acq + tau truncation (learned tox)
     ("random",       "random",   "none"),   # naive baseline
     ("farthest",     "farthest", "none"),   # coverage diversity baseline
     ("cluster",      "cluster",  "none"),   # cluster-representative baseline
@@ -53,7 +54,7 @@ ANALYSIS_A = [
 B_BASES = [
     ("greedy",      "greedy", "none"),
     ("truncation",  "greedy", "known"),
-    ("ehvi",        "ehvi",   "pred"),
+    ("ehvi_trunc",  "ehvi",   "pred"),
 ]
 DIVERSITY_OPS = ["none", "cap", "kdpp"]
 TOX_SOURCES = ["contrast", "aggregate"]
@@ -95,7 +96,12 @@ def main():
     ap.add_argument("--n-rounds", type=int, default=8)
     ap.add_argument("--batch", type=int, default=10)
     ap.add_argument("--tau", type=float, default=0.5,
-                    help="safety QUANTILE: keep genes below the tau-quantile of toxicity")
+                    help="safety ceiling. With --tau-mode absolute (default): a toxicity "
+                         "value on the Chronos scale (0.5 = contrast effect > -0.5 = 'not "
+                         "essential in the normal stand-in', or common-essential < 50%% of "
+                         "lines). With quantile: keep the safest tau fraction.")
+    ap.add_argument("--tau-mode", choices=["absolute", "quantile"], default="absolute",
+                    help="absolute (biological, default) or quantile (scale-free sweeps)")
     ap.add_argument("--thresh", type=float, default=-0.5, help="strongly-lethal threshold")
     ap.add_argument("--cap", type=int, default=2, help="per-pathway cap for the cap operator")
     ap.add_argument("--pool", type=int, default=200, help="quality pool the diversity operator selects within")
@@ -156,7 +162,7 @@ def main():
     common = dict(n_init=args.n_initial, n_rounds=args.n_rounds, batch=args.batch,
                   surr_factory=factory)
     nom_common = dict(K=args.K, tau=args.tau, surr_factory=factory, cap=args.cap,
-                      pool=args.pool, joint_factory=joint_factory)
+                      pool=args.pool, joint_factory=joint_factory, tau_mode=args.tau_mode)
 
     rows, scatters = [], []
     for cl in lines:
@@ -179,6 +185,9 @@ def main():
                          for k in _TOX_INDEP_ACQ}
             for src in TOX_SOURCES:
                 tox = tox_by_source[src]
+                # biological ceiling on TRUE toxicity (for the safe/toxic counts +
+                # mean-efficacy-of-permissible-picks); same rule as the nominate filter.
+                ceiling = _tox_threshold(tox, args.tau, args.tau_mode)
                 rev = dict(rev_indep)
                 rev["ehvi"] = run_acquisition("ehvi", X, eff, tox, seed=seed,
                                               ehvi_samples=args.ehvi_samples,
@@ -190,7 +199,7 @@ def main():
                 for label, acq, safety in ANALYSIS_A:
                     sel = nominate(rev[acq], X, eff, tox, mem, safety=safety,
                                    diversity="none", S=S, **nom_common)
-                    m = evaluate(sel, eff, tox, mem, X)
+                    m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
                     rows.append(dict(analysis="A", tox_source=src, method=label,
                                      base=label, operator="none", acq=acq,
                                      safety=safety, cell_line=cl, seed=seed, **m))
@@ -201,7 +210,7 @@ def main():
                     for op in DIVERSITY_OPS:
                         sel = nominate(rev[acq], X, eff, tox, mem, safety=safety,
                                        diversity=op, S=S, **nom_common)
-                        m = evaluate(sel, eff, tox, mem, X)
+                        m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
                         rows.append(dict(analysis="B", tox_source=src,
                                          method=f"{base_label}+{op}", base=base_label,
                                          operator=op, acq=acq, safety=safety,
@@ -226,8 +235,9 @@ def main():
     meta = dict(panel=panel, n_genes=int(len(eff)), lines=lines, seeds=list(args.seeds),
                 K=args.K, tau=args.tau, cap=args.cap, n_rounds=args.n_rounds,
                 batch=args.batch, kdpp_sim=args.kdpp_sim, acq_score=args.acq_score,
-                joint_gp=bool(args.joint_gp), tox_sources=TOX_SOURCES,
-                contrast_line=contrast_line, contrast_ranked=contrast_ranked)
+                tau_mode=args.tau_mode, joint_gp=bool(args.joint_gp),
+                tox_sources=TOX_SOURCES, contrast_line=contrast_line,
+                contrast_ranked=contrast_ranked)
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
 
     for src in TOX_SOURCES:
