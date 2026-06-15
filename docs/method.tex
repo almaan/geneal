@@ -135,6 +135,24 @@ So the variance is small (we are confident) for genes near where we have measure
 large (we are unsure) for genes in unexplored regions. This is the quantity active learning
 exploits to decide where to explore.
 
+\paragraph{Is a GP the right choice here? (an honest caveat).} The kernel encodes one
+assumption: genes with similar fingerprints have similar efficacy ($x$ close $\Rightarrow$
+$y$ close). Whether that holds is an \emph{empirical property of the embedding}, and for
+gene-knockout outcomes it holds only \emph{weakly} --- two genes adjacent in embedding space
+have only modestly correlated knockout effects. So the GP's predictive accuracy is capped
+by the representation, not by the model class; \emph{no} regressor can manufacture signal the
+fingerprint does not carry. We nonetheless use a GP because (i) the budget is tiny (tens to
+$\sim$120 measured genes), the regime where a GP beats data-hungry alternatives; (ii) active
+learning needs \emph{calibrated uncertainty} $\sigma(x)$, which the GP gives for free and
+point predictors do not; and (iii) nomination only needs the top-$K$ \emph{ranking}, which a
+weakly-smooth GP can still produce even when its absolute $R^2$ is mediocre. The Mat\'ern-5/2
+choice (rather than the smoother RBF) is deliberate for the same reason: it tolerates a
+rougher surface. Crucially, the parts of the method that do \emph{not} route through the GP
+(the known-toxicity safety ceiling of Step 5, the pathway cap, the embedding/graph diversity
+similarity) are unaffected by this caveat --- and the truncation-vs-EHVI comparison (Step 6)
+\emph{measures} how much the weak smoothness costs when safety must be learned rather than
+known.
+
 \paragraph{Fitting the kernel.} We choose $(\theta,\ell,\sigma_n)$ to maximize the
 \emph{log marginal likelihood},
 \begin{equation}
@@ -471,7 +489,13 @@ greedy top-$K$) $\to$ truncation (known-toxicity ceiling, Step 5) $\to$ EHVI (a
 dual-objective acquisition that \emph{learns} toxicity, Step 6, with a learned ceiling at
 nomination). Race these against the random / CoreSet / TypiClust baselines, and plot all of
 them on the efficacy--toxicity plane. Question: does a safety rule buy a better
-potency--safety trade-off than naive or diversity-first prior work?
+potency--safety trade-off than naive or diversity-first prior work? \textbf{The
+truncation-vs-EHVI gap is itself a measurement:} truncation uses the \emph{known}
+common-essential annotation, EHVI must \emph{learn} toxicity from the embedding, so the
+distance between them on the plane is the price of the weak embedding smoothness on the
+safety axis --- if the embedding predicted toxicity well, learned would meet known; if not,
+learned lands at higher true toxicity. (Empirically it does: learned safety is
+Pareto-dominated by the known-toxicity ceiling.)
 \item \textbf{B --- diversity / robustness.} Take a fixed base nomination (we use two: naive
 greedy, and the safety rule that won analysis A) and \emph{layer} the diversity operator on
 top: none $\to$ per-pathway cap $\to$ $k$-DPP. Question: does the operator de-concentrate
