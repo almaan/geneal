@@ -37,7 +37,7 @@ echo "node=$(hostname) cpus=${SLURM_CPUS_PER_TASK} job=${SLURM_JOB_ID}"
 python -c "import geneal" || { echo "geneal import failed"; exit 1; }
 echo "ablation: panel='${PANEL:-FULL GENOME}' ${NLINES} lines x [${SEEDS}] seeds, K=${K}, AL ${ROUNDS}x${BATCH}"
 
-python scripts/run_ablation.py \
+python -u scripts/run_ablation.py \
     --embeddings "$EMB" $PANEL_ARG \
     --n-cell-lines "$NLINES" --seeds $SEEDS --K "$K" \
     --n-initial "$NINIT" --n-rounds "$ROUNDS" --batch "$BATCH" --tau "$TAU" \

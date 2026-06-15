@@ -84,6 +84,11 @@ def main():
     ap.add_argument("--out-root", default="res/runs_ablation")
     ap.add_argument("--run-name", default=None)
     args = ap.parse_args()
+    import sys
+    try:
+        sys.stdout.reconfigure(line_buffering=True)   # live progress under SLURM
+    except Exception:
+        pass
     factory = _factory(args.n_iters)
 
     ge = load_gene_effect(args.gene_effect)
@@ -100,7 +105,7 @@ def main():
     if args.cell_lines:
         lines = list(args.cell_lines)
     else:
-        lines = ge.loc[labs].isna().sum(0).sort_values().index[:args.n_cell_lines].tolist()
+        lines = ge.loc[labs].isna().sum(axis=0).sort_values().index[:args.n_cell_lines].tolist()
     print(f"cell lines ({len(lines)}): {lines}")
 
     common = dict(n_init=args.n_initial, n_rounds=args.n_rounds, batch=args.batch,
