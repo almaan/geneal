@@ -84,6 +84,10 @@ def main():
                          "(default, tunable); 'string' = sparse STRING. Never outcome similarity.")
     ap.add_argument("--acq-score", choices=["ucb", "ei"], default="ucb",
                     help="greedy-efficacy acquisition score (UCB=mu+2sigma, or EI)")
+    ap.add_argument("--joint-gp", action="store_true",
+                    help="learned-safety methods (trunc_pred, ehvi) use a JOINT multitask "
+                         "GP over (efficacy, toxicity) instead of two independent GPs. "
+                         "Borrows strength via the ~0.8 eff-tox correlation.")
     ap.add_argument("--n-cell-lines", type=int, default=6)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--K", type=int, default=30)
@@ -113,6 +117,11 @@ def main():
     except Exception:
         pass
     factory = _factory(args.n_iters)
+    joint_factory = None
+    if args.joint_gp:
+        from geneal.models.multitask import MultiTaskGPR
+        joint_factory = lambda: MultiTaskGPR(n_iters=args.n_iters)
+        print("joint multitask GP enabled for learned-safety methods (trunc_pred, ehvi)")
 
     ge = load_gene_effect(args.gene_effect)
     emb = pd.read_parquet(args.embeddings)
@@ -143,7 +152,7 @@ def main():
     common = dict(n_init=args.n_initial, n_rounds=args.n_rounds, batch=args.batch,
                   surr_factory=factory)
     nom_common = dict(K=args.K, tau=args.tau, surr_factory=factory, cap=args.cap,
-                      pool=args.pool)
+                      pool=args.pool, joint_factory=joint_factory)
 
     rows, scatters = [], []
     for cl in lines:
@@ -169,7 +178,8 @@ def main():
                 rev = dict(rev_indep)
                 rev["ehvi"] = run_acquisition("ehvi", X, eff, tox, seed=seed,
                                               ehvi_samples=args.ehvi_samples,
-                                              shortlist=args.shortlist, **common)
+                                              shortlist=args.shortlist,
+                                              joint_factory=joint_factory, **common)
                 want_scatter = (seed == args.seeds[0])
                 picks = {}
                 # Analysis A
@@ -212,8 +222,8 @@ def main():
     meta = dict(panel=panel, n_genes=int(len(eff)), lines=lines, seeds=list(args.seeds),
                 K=args.K, tau=args.tau, cap=args.cap, n_rounds=args.n_rounds,
                 batch=args.batch, kdpp_sim=args.kdpp_sim, acq_score=args.acq_score,
-                tox_sources=TOX_SOURCES, contrast_line=contrast_line,
-                contrast_ranked=contrast_ranked)
+                joint_gp=bool(args.joint_gp), tox_sources=TOX_SOURCES,
+                contrast_line=contrast_line, contrast_ranked=contrast_ranked)
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
 
     for src in TOX_SOURCES:

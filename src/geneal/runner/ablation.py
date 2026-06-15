@@ -114,7 +114,7 @@ def acquire(kind, X, eff, revealed, cand, batch, rng, surr_factory, score="ucb")
 
 def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
                     surr_factory=None, ehvi_samples=32, shortlist=150,
-                    noise=None, score="ucb"):
+                    noise=None, score="ucb", joint_factory=None):
     """Full active-learning loop for one acquisition. Returns the final revealed
     global indices. Common random numbers: every kind seeds its initial set from
     default_rng(seed).permutation, so kinds are paired per (line, seed)."""
@@ -124,7 +124,8 @@ def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
     n = len(eff)
     if kind == "ehvi":
         runner = BivariateALRunner(surr_factory, noise or _ZeroNoise(),
-                                   ehvi_samples=ehvi_samples, shortlist=shortlist)
+                                   ehvi_samples=ehvi_samples, shortlist=shortlist,
+                                   joint_factory=joint_factory)
         hist = runner.run(X, eff, tox, n_init, n_rounds, batch, seed)
         return [int(i) for i in hist[-1]["revealed"]]
     rng = np.random.default_rng(seed)
@@ -147,7 +148,7 @@ _DIV_MODE = {"none": "greedy", "cap": "cap", "kdpp": "dpp"}
 
 
 def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
-             S=None, surr_factory=None, cap=2, pool=200):
+             S=None, surr_factory=None, cap=2, pool=200, joint_factory=None):
     """Nominate K targets. Fit a final efficacy GP on revealed labels, predict
     genome-wide; apply the safety filter; then the diversity operator over the
     top-`pool` eligible candidates (none=top-K, cap=per-pathway, kdpp=k-DPP on S).
@@ -167,17 +168,27 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
     n = len(eff)
 
-    q = np.asarray(surr_factory().fit(X[revealed], eff[revealed]).predict(X)[0],
-                   dtype=float).copy()
-    if safety == "known":
-        thr = float(np.quantile(tox, tau))
-        q[tox > thr] = _NEG
-    elif safety == "pred":
-        m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0])
+    if safety == "pred" and joint_factory is not None:
+        # joint (multitask) GP: efficacy + toxicity share strength. q (efficacy)
+        # and the toxicity filter both come from the one correlated fit.
+        m2 = np.asarray(joint_factory().fit(
+            X[revealed], np.column_stack([eff[revealed], tox[revealed]])).predict(X)[0])
+        q = m2[:, 0].astype(float).copy()
+        m_tox = m2[:, 1]
         thr = float(np.quantile(m_tox, tau))
         q[m_tox > thr] = _NEG
-    elif safety != "none":
-        raise ValueError(f"unknown safety {safety!r}")
+    else:
+        q = np.asarray(surr_factory().fit(X[revealed], eff[revealed]).predict(X)[0],
+                       dtype=float).copy()
+        if safety == "known":
+            thr = float(np.quantile(tox, tau))
+            q[tox > thr] = _NEG
+        elif safety == "pred":
+            m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0])
+            thr = float(np.quantile(m_tox, tau))
+            q[m_tox > thr] = _NEG
+        elif safety != "none":
+            raise ValueError(f"unknown safety {safety!r}")
 
     # restrict the diversity operator to the top-`pool` eligible by quality:
     # bounds k-DPP cost (O(K^2 pool)) and diversifies only among high-efficacy genes.

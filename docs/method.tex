@@ -163,7 +163,25 @@ known.
 the second term penalizes overly flexible kernels (Occam's razor, automatically balancing
 fit against simplicity). The last term is a constant. Maximizing this picks the
 similarity rule best supported by the data. When we later need two unknowns (efficacy and
-toxicity) we simply fit one independent GP for each.
+toxicity) we fit one independent GP for each by default.
+
+\paragraph{Independent vs.\ joint (multitask) GPs.} Fitting efficacy and toxicity
+\emph{independently} assumes the two outcomes are unrelated given the fingerprint. In our
+data they are not: knockout efficacy and toxicity correlate at $\approx 0.8$ (the most
+lethal knockouts tend to be pan-essential). A \emph{multitask} (coregionalized) GP exploits
+this by sharing a kernel across both outputs,
+\begin{equation}
+K\big((x,a),(x',b)\big)=k_{\text{data}}(x,x')\,\cdot\,B_{ab},
+\end{equation}
+\textbf{reading it:} the covariance between output $a$ of gene $x$ and output $b$ of gene
+$x'$ factorizes into the usual input similarity $k_{\text{data}}(x,x')$ times a learned
+$2\times2$ \emph{task-coupling} matrix $B$ ($B_{ab}$ large $=$ the two outcomes move
+together). Because every measured gene is assayed for \emph{both} outcomes, fitting is
+standard. The payoff: the abundant, acquisition-targeted efficacy labels \emph{borrow
+strength} to sharpen the scarcer toxicity estimate --- precisely the quantity the
+learned-safety methods (Step 5/6) depend on. We provide this as an option and report it
+against the independent-GP default; when EHVI samples the joint posterior it then uses the
+correlated $2\times2$ covariance per gene rather than treating the two axes as independent.
 
 \section{Step 2: scoring genes to measure (single-objective acquisition)}
 

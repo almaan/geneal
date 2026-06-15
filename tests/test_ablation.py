@@ -125,6 +125,20 @@ def test_kdpp_with_embedding_S_changes_pick():
     assert set(kdpp) != set(base)   # diversity reshuffles away from pure top-K
 
 
+def test_joint_gp_nominate_and_acquire():
+    from geneal.models.multitask import MultiTaskGPR
+    jf = lambda: MultiTaskGPR(n_iters=25)
+    X, eff, tox, membership = _toy()
+    # joint EHVI acquisition runs and grows the revealed set
+    rev = run_acquisition("ehvi", X, eff, tox, 8, 2, 4, seed=0, surr_factory=_factory,
+                          ehvi_samples=8, shortlist=30, joint_factory=jf)
+    assert len(rev) == len(set(rev)) and len(rev) == 8 + 2 * 4
+    # joint pred-safety nomination runs and returns K
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="pred",
+                   diversity="none", tau=0.5, surr_factory=_factory, joint_factory=jf)
+    assert len(sel) == 6 and len(set(sel)) == 6
+
+
 def test_build_string_S_shape_and_diag():
     # gene_names with embedded entrez ids; S is symmetric with unit diagonal.
     names = ["AAA (1)", "BBB (2)", "CCC (999999999)"]  # last absent from STRING

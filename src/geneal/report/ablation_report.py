@@ -151,6 +151,50 @@ def _tradeoff_per_line(d, src, lines, fig_dir):
     return _html(fig)
 
 
+def _cloud_fig(d, methods, fig_dir, name):
+    """One gene-landscape figure: a panel per method. Grey = all candidate genes
+    (toxicity x, efficacy y); coloured open circles = that method's nominated
+    targets. `d` is already filtered (one line, or all lines pooled)."""
+    tox, eff = d["toxicity"].to_numpy(), d["efficacy"].to_numpy()
+    ncol = min(4, len(methods)); nrow = math.ceil(len(methods) / ncol)
+    fig = make_subplots(rows=nrow, cols=ncol,
+                        subplot_titles=[LABELS.get(m, m) for m in methods],
+                        horizontal_spacing=0.05, vertical_spacing=0.13)
+    for k, m in enumerate(methods):
+        r, c = k // ncol + 1, k % ncol + 1
+        fig.add_trace(go.Scatter(x=tox, y=eff, mode="markers", showlegend=False,
+                      marker=dict(size=2.5, color="#dfe3e8"), hoverinfo="skip"), row=r, col=c)
+        pk = d[f"pick_{m}"].to_numpy(dtype=bool)
+        fig.add_trace(go.Scatter(x=tox[pk], y=eff[pk], mode="markers", showlegend=False,
+                      marker=dict(size=8, color=COLORS.get(m, "#444"), symbol="circle-open",
+                                  line=dict(width=1.6, color=COLORS.get(m, "#444")))),
+                      row=r, col=c)
+    _style(fig, height=250 * nrow, legend_bottom=False)
+    fig.update_xaxes(title_text="toxicity →", title_font=dict(size=10))
+    fig.update_yaxes(title_text="efficacy ↑", title_font=dict(size=10))
+    for ann in fig.layout.annotations:
+        ann.font = dict(size=12, family=FONT, color=INK)
+    _export(fig, fig_dir, name)
+    return _html(fig)
+
+
+def _gene_cloud_section(scatter, src, lines, fig_dir):
+    """Aggregate (all lines pooled) gene-landscape cloud + one per cell line."""
+    if scatter is None or scatter.empty:
+        return None
+    d = scatter[scatter.tox_source == src] if "tox_source" in scatter.columns else scatter
+    if d.empty:
+        return None
+    methods = [m for m in A_ORDER if f"pick_{m}" in d.columns]
+    if not methods:
+        return None
+    agg = _cloud_fig(d, methods, fig_dir, f"gene_cloud_{src}")
+    cl_order = [c for c in (lines or []) if c in set(d.cell_line)] or sorted(d.cell_line.unique())
+    per = [(cl, _cloud_fig(d[d.cell_line == cl], methods, fig_dir, f"gene_cloud_{src}_{cl}"))
+           for cl in cl_order]
+    return {"agg": agg, "per": per}
+
+
 def _table_A(d):
     methods = [m for m in A_ORDER if m in set(d.method)]
     rows = []
@@ -262,8 +306,19 @@ _FACET_TMPL = """
 <div class="card">{{ tradeoff }}</div>
 {% if perline %}
 <h3>A &middot; Per-cell-line tradeoff (manuscript subfigures)</h3>
-<div class="note">One panel per cell line; the same 7 methods. Shows the safety ordering is consistent across lines, not an averaging artifact.</div>
+<div class="note">One panel per cell line; the same methods. Shows the safety ordering is consistent across lines, not an averaging artifact.</div>
 <div class="card">{{ perline }}</div>
+{% endif %}
+{% if cloud %}
+<h3>A &middot; Gene landscape — nominated targets per method (all lines pooled)</h3>
+<div class="note">Each panel a method. Grey = all candidate genes (pooled over the {{ n_lines }} cell lines); open circles = that method's {{ cloudK }} nominated targets. Safety rules pull picks left (safer); greedy/baselines reach into the toxic right.</div>
+<div class="card">{{ cloud.agg|safe }}</div>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ per-cell-line gene landscapes ({{ cloud.per|length }})</summary>
+{% for cl, c in cloud.per %}
+<div class="note" style="margin-top:.8rem"><b>{{ cl }}</b></div>
+<div class="card">{{ c|safe }}</div>
+{% endfor %}
+</details>
 {% endif %}
 <h3>A &middot; Method table</h3>
 <div class="card"><table>
@@ -336,10 +391,12 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
         d = df[df.tox_source == src]
         dA, dB = d[d.analysis == "A"], d[d.analysis == "B"]
         a_cols, a_rows = _table_A(dA); b_cols, b_rows = _b_table(dB)
+        cloud = _gene_cloud_section(scatter, src, lines, fig_dir)
         block = Environment(loader=BaseLoader()).from_string(_FACET_TMPL).render(
             src=src, primary=" (primary)" if src == "contrast" else "",
             tradeoff=_tradeoff_points(dA, src, fig_dir),
             perline=_tradeoff_per_line(dA, src, lines, fig_dir),
+            cloud=cloud, cloudK=meta.get("K", ""), n_lines=df.cell_line.nunique(),
             a_cols=a_cols, a_rows=a_rows, headline_b=_headline_B(dB),
             kdpp_sim=kdpp_sim, b_cols=b_cols, b_rows=b_rows,
             b_bar=_b_bar(dB, src, fig_dir), b_eff_conc=_b_eff_conc(dB, src, fig_dir))

@@ -43,19 +43,30 @@ def hypervolume2d(P: np.ndarray, ref: np.ndarray) -> float:
     return float(area)
 
 
-def mc_ehvi(mean, std, front, ref, rng, n_samples: int = 128) -> np.ndarray:
+def mc_ehvi(mean, std, front, ref, rng, n_samples: int = 128, cov=None) -> np.ndarray:
     """Monte-Carlo Expected Hypervolume Improvement per candidate (maximize both
-    objectives). mean/std: (n_cand, 2) independent-Gaussian posteriors. front:
-    current Pareto set (m, 2). Returns EHVI >= 0 per candidate.
+    objectives). mean: (n_cand, 2) posterior means. std: (n_cand, 2) marginal
+    stds for INDEPENDENT-Gaussian sampling. cov: optional (n_cand, 2, 2) per-
+    candidate covariance for CORRELATED sampling (joint GP) -- if given, draws are
+    sampled from N(mean_i, cov_i) and `std` is ignored. front: current Pareto set
+    (m, 2). Returns EHVI >= 0 per candidate.
 
     Vectorized: the 2-D hypervolume improvement of a point q=(a,b) over the front
     is the band integral  int_{ref_x}^{a} max(0, b - h(x)) dx,  where h(x) is the
     front's (non-increasing) upper-boundary step function. Precompute the bands
     once, evaluate all (sample x candidate) draws against them with numpy."""
-    mean = np.asarray(mean, float); std = np.asarray(std, float)
+    mean = np.asarray(mean, float)
     front = np.asarray(front, float).reshape(-1, 2)
     n = len(mean)
-    draws = mean[None] + std[None] * rng.standard_normal((n_samples, n, 2))  # (S,n,2)
+    z = rng.standard_normal((n_samples, n, 2))
+    if cov is not None:
+        cov = np.asarray(cov, float)
+        # Cholesky per candidate (jitter for PSD safety); draws = mean + L z
+        L = np.linalg.cholesky(cov + 1e-9 * np.eye(2)[None])      # (n,2,2)
+        draws = mean[None] + np.einsum("nij,snj->sni", L, z)      # (S,n,2)
+    else:
+        std = np.asarray(std, float)
+        draws = mean[None] + std[None] * z                       # (S,n,2)
     A = draws[..., 0]; B = draws[..., 1]                                      # (S,n)
 
     if len(front):
