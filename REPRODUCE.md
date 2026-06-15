@@ -42,6 +42,27 @@ demo subsets (`pubmedbert_hvg` etc.) are kept for quick runs.
 | 7. Risk nomination | `make risk` | `run_risk_nomination.py` | `res/runs_risk/<ts>/report.html` |
 | 7b. Large sweep | `make risk-large` | `launch_risk_sweep.sh` | sharded combined report |
 | 8. Dual/selectivity | `make dual` | `run_dual_experiment.py` | report |
+| **9. DEFAULT ablation** | **`make ablation`** | **`run_ablation.py`** | **`res/runs_ablation/<ts>/report.html`** |
+
+### Default output — the two-analysis ablation (stage 9)
+
+`make ablation` (or `sbatch jobs/ablation.sh`) is the **standing default report**.
+It runs the full active-learning loop (8 rounds × batch 10) for every method and
+produces ONE report with two deliberately-separate analyses:
+
+- **A — safety vs efficacy.** One axis (the safety rule): `none` (naive greedy) →
+  `truncation` (known-toxicity ceiling) → `ehvi` (dual-objective EHVI acquisition,
+  learned-toxicity ceiling), plus `random`/`coreset`/`typiclust` baselines. All six
+  plotted on the efficacy–toxicity tradeoff (method-points + per-gene cloud).
+- **B — diversity / robustness.** The operators `none`/`cap` (CORUM per-pathway)/
+  `kdpp` (STRING-similarity k-DPP) layered on two bases (`greedy` and the winning
+  safety rule from A). Capping is a bolt-on-any-method hedge.
+
+**Representations:** PubMedBERT embeddings predict efficacy/toxicity; CORUM gives
+pathway membership (capping/concentration); STRING gives the k-DPP similarity `S`.
+STRING is a *similarity*, never a prediction embedding. Default scale: 5k panel, 6
+lines, 3 seeds. Full genome: `make ablation-fullgenome` (or
+`sbatch --export=ALL,PANEL= jobs/ablation.sh`).
 
 ### Stage 1 — DepMap data (one-time)
 The DepMap 26Q1 CRISPRGeneEffect + Model are fetched from the portal download

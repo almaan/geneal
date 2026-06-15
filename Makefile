@@ -23,10 +23,13 @@ K       := 30
 # scprint (44k native), string_edges_all + corum_*_all. Co-dependency is NOT used.
 
 .PHONY: help test data panel uniprot esm2-emb pubmedbert-emb scprint-emb \
-        diagnostics multiline string corum risk risk-large dual all clean-res
+        diagnostics multiline string corum risk risk-large dual all clean-res \
+        ablation ablation-fullgenome
 
 help:
 	@echo "geneal pipeline targets (see REPRODUCE.md):"
+	@echo "  ablation       - DEFAULT OUTPUT: two-analysis ablation (5k panel)"
+	@echo "  ablation-fullgenome - same, full ~18.5k-gene genome"
 	@echo "  test           - run the full pytest suite"
 	@echo "  data           - download + curate DepMap (scripts/... ; see REPRODUCE.md)"
 	@echo "  panel          - select the 2043-gene HVG panel (deterministic)"
@@ -111,6 +114,22 @@ risk-5k:         ## risk nomination on the 5k panel (genome-wide cache subset)
 
 risk-large:
 	bash scripts/launch_risk_sweep.sh 40 6 8 $(K)
+
+# --- DEFAULT OUTPUT: two-analysis ablation (safety-vs-efficacy + diversity) ---
+# A) safety axis (none/truncation/ehvi) + random/coreset/typiclust on the
+#    efficacy-toxicity tradeoff; B) diversity operators (none/cap/kdpp) on two
+#    bases. PubMedBERT predicts; CORUM=pathways (cap), STRING=k-DPP similarity.
+# 5k panel, 6 lines, 3 seeds, AL 8x10. SLURM: `sbatch jobs/ablation.sh`.
+ablation:        ## DEFAULT report: two-analysis ablation on the 5k panel
+	$(MM) python scripts/run_ablation.py --embeddings $(EMB_ALL) \
+	  --panel data/processed/depmap/panel_5k.txt \
+	  --n-cell-lines 6 --seeds 0 1 2 --K $(K) --n-rounds 8 --batch 10 \
+	  --out-root res/runs_ablation
+
+ablation-fullgenome:  ## same ablation on the full ~18.5k-gene genome
+	$(MM) python scripts/run_ablation.py --embeddings $(EMB_ALL) --panel none \
+	  --n-cell-lines 6 --seeds 0 1 2 --K $(K) --n-rounds 8 --batch 10 \
+	  --out-root res/runs_ablation_fullgenome
 
 dual:
 	$(MM) python scripts/run_dual_experiment.py --seeds $(SEEDS)
