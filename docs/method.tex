@@ -206,31 +206,47 @@ determinant of a small matrix built from $B$:
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
 \item $q_i$ is the \emph{quality} of gene $i$ --- e.g.\ its UCB score. It appears on both sides,
 so the diagonal of $L$ is $q_i^2$: high-quality genes have large diagonal entries.
-\item $S_{ij}\in[-1,1]$ is the \emph{similarity} between genes $i$ and $j$. Two sources are
-natural, and we use them in different places. (a) \emph{Outcome similarity}:
-$S_{ij}=\Sigma_{ij}/\sqrt{\Sigma_{ii}\Sigma_{jj}}$, the correlation from the GP's joint
-posterior covariance $\Sigma$ --- ``measuring one tells you the other.'' (b) \emph{Biological
-similarity from a network}: the STRING combined-score $S_{ij}\in[0,1]$ between genes $i$ and
-$j$ (how strongly the database links them). $S_{ij}\approx 1$ means closely related;
-$S_{ij}\approx 0$ means unrelated.
-\item \textbf{A note on STRING (important).} STRING is a \emph{network}, not a per-gene
-feature vector: it yields a pairwise \emph{similarity}, never an embedding to predict from.
-So STRING never enters the GP --- efficacy/toxicity are predicted from a learned embedding
-(here, gene-text embeddings). STRING is used \emph{only} as the diversity similarity $S$ in
-the determinant above, and the same network backs the pathway cap below. Prediction and
-diversity-structure are deliberately separated: the embedding predicts, the graph
-diversifies.
+\item $S_{ij}$ is a \emph{mechanism/representation similarity} between genes $i$ and $j$.
+\textbf{Crucially, it is NOT outcome similarity.} A natural-looking choice would be the
+correlation of the two genes' predicted efficacies (or the GP posterior correlation), but
+that is exactly backwards here: we \emph{want} every picked gene to have a similar outcome
+(all highly lethal), so penalizing outcome-similarity would push the portfolio toward
+\emph{low}-efficacy genes. Diversity must be measured in a space \emph{other} than the
+outcome. We use two such spaces:
+\begin{itemize}[leftmargin=1.5em,itemsep=0pt]
+\item[(a)] \emph{Embedding-space similarity} (default): the cosine similarity of the genes'
+PubMedBERT fingerprints, $S_{ij}=\tfrac12\big(1+\cos(x_i,x_j)\big)\in[0,1]$. This is
+\emph{dense} --- every pair has a value --- so the determinant's diversity term varies
+smoothly and the quality/diversity trade-off is genuinely tunable.
+\item[(b)] \emph{Network similarity}: the STRING combined-score $S_{ij}\in[0,1]$ (how
+strongly the database links the two genes). Biologically grounded but \emph{sparse} (most
+pairs are $0$), so on its own it gives the determinant little to work with at genome scale.
+\end{itemize}
+$S_{ij}\approx 1$ means ``same mechanism'' (avoid taking both); $S_{ij}\approx 0$ means
+mechanistically unrelated.
+\item \textbf{A note on representations.} The PubMedBERT \emph{embedding} predicts efficacy
+and toxicity (it enters the GP) \emph{and} supplies the dense diversity similarity above ---
+two different uses of the same fingerprint. STRING and CORUM are \emph{networks}, not
+per-gene feature vectors: they yield a pairwise similarity / a pathway membership, never an
+input to predict from, so they only structure the diversity step (the $k$-DPP $S$ and the
+pathway cap below). Prediction and diversity-structure are deliberately separated.
 \item $\det(L_B)$ is large only when the chosen genes are \emph{both} high quality (big
 diagonal) \emph{and} dissimilar (small off-diagonal, so the rows are nearly perpendicular).
 Two near-identical high-quality genes make two nearly-parallel rows, which collapses the
 determinant toward zero --- so the DPP will not pick both.
 \end{itemize}
-\textbf{Why this is principled (the key fact).} For Gaussian variables, $\tfrac12\log\det$
-of a covariance is the \emph{entropy} (information content). So maximizing $\log\det(L_B)$
-literally maximizes the information the batch carries: it is at once a quality objective
-and a diversity objective, not an ad-hoc combination. Finding the exact best size-$q$ set
-is computationally hard, so we add genes one at a time, each time taking the one that
-increases $\log\det$ the most (a fast ``greedy'' rule).
+\textbf{Why this is principled (the key fact).} The determinant $\det(L_B)$ equals the
+\emph{squared volume} of the parallelepiped spanned by the quality-scaled similarity rows of
+the chosen genes. Volume is large only when the rows are both \emph{long} (high quality
+$q_i$) and \emph{pointing in different directions} (low similarity $S_{ij}$); two
+near-duplicate genes give two nearly-parallel rows that span almost no volume. So
+maximizing $\log\det(L_B)$ is a single objective that is \emph{simultaneously} a quality and
+a diversity criterion, not an ad-hoc weighted sum --- the trade-off between them falls out
+of the geometry. (When $S$ is a covariance this volume is also the Gaussian entropy /
+information content of the batch; with an embedding- or network-similarity $S$ the
+volume/diversity reading is the one that applies.) Finding the exact best size-$q$ set is
+computationally hard, so we add genes one at a time, each time taking the one that increases
+$\log\det$ the most (a fast ``greedy'' rule).
 
 \subsection{A simpler, robust hedge: cap genes per pathway}
 

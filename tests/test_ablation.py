@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 
 from geneal.runner.ablation import (
-    run_acquisition, nominate, evaluate, build_string_S, ACQUISITIONS,
+    run_acquisition, nominate, evaluate, build_string_S, build_embedding_S,
+    ACQUISITIONS,
 )
 from geneal.models.surrogate import GPRSurrogate
 
@@ -87,6 +88,32 @@ def test_evaluate_returns_finite_metrics():
     for key in ("mean_efficacy", "max_efficacy", "mean_toxicity", "concentration",
                 "robustness", "n_pathways", "alpha_ndcg"):
         assert key in m and np.isfinite(m[key])
+
+
+def test_build_embedding_S_dense_unit_diag_in_range():
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((10, 4))
+    S = build_embedding_S(X)
+    assert S.shape == (10, 10)
+    assert np.allclose(np.diag(S), 1.0)
+    assert np.allclose(S, S.T)
+    assert S.min() >= 0.0 and S.max() <= 1.0 + 1e-9
+    # dense: identical rows -> S=1, opposite rows -> S=0
+    X2 = np.array([[1.0, 0.0], [1.0, 0.0], [-1.0, 0.0]])
+    S2 = build_embedding_S(X2)
+    assert np.isclose(S2[0, 1], 1.0) and np.isclose(S2[0, 2], 0.0)
+
+
+def test_kdpp_with_embedding_S_changes_pick():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    S = build_embedding_S(X)
+    base = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="none",
+                    diversity="none", tau=1.0, surr_factory=_factory)
+    kdpp = nominate(rev, X, eff, tox, membership, S=S, K=6, safety="none",
+                    diversity="kdpp", tau=1.0, surr_factory=_factory)
+    assert len(kdpp) == 6
+    assert set(kdpp) != set(base)   # diversity reshuffles away from pure top-K
 
 
 def test_build_string_S_shape_and_diag():

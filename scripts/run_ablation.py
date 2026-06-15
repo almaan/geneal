@@ -30,7 +30,7 @@ from sklearn.preprocessing import StandardScaler
 from geneal.data.depmap import load_gene_effect, parse_entrez
 from geneal.data.selective import build_selective_dataset, corum_membership
 from geneal.runner.ablation import (run_acquisition, nominate, evaluate,
-                                    build_string_S, ACQUISITIONS)
+                                    build_string_S, build_embedding_S, ACQUISITIONS)
 
 # Analysis A: (label, acquisition, safety). diversity is always "none" here.
 ANALYSIS_A = [
@@ -66,6 +66,10 @@ def main():
     ap.add_argument("--panel", default="data/processed/depmap/panel_5k.txt",
                     help="entrez-id panel file; pass '' or 'none' for the full genome")
     ap.add_argument("--string", default="data/processed/depmap/string_edges_all.parquet")
+    ap.add_argument("--kdpp-sim", choices=["embedding", "string"], default="embedding",
+                    help="k-DPP similarity S: 'embedding' = dense PubMedBERT cosine "
+                         "(default, tunable); 'string' = sparse STRING combined-score. "
+                         "Never outcome similarity (we want shared high-efficacy outcomes).")
     ap.add_argument("--n-cell-lines", type=int, default=6)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--K", type=int, default=30)
@@ -126,7 +130,10 @@ def main():
         eff = np.asarray(ds.target, float)            # raw lethality (lam=0)
         tox = np.asarray(aux["common_essential"], float)
         mem = corum_membership(ds.gene_names)
-        S = build_string_S(ds.gene_names, args.string)
+        # k-DPP similarity: embedding cosine (dense, default) or STRING (sparse).
+        # NOT outcome similarity -- diversity lives in mechanism space, not outcome.
+        S = (build_embedding_S(X) if args.kdpp_sim == "embedding"
+             else build_string_S(ds.gene_names, args.string))
         line_cache[cl] = (X, eff, tox, mem, S)
         print(f"[{cl}] {len(eff)} genes, {sum(bool(v) for v in mem.values())} CORUM-annotated")
 
@@ -208,7 +215,7 @@ def main():
     meta = dict(panel=panel, n_genes=int(len(line_cache[lines[0]][1])),
                 lines=lines, seeds=list(args.seeds), K=args.K, tau=args.tau,
                 cap=args.cap, n_rounds=args.n_rounds, batch=args.batch,
-                best_safety=best_safety, safety_utility=util)
+                kdpp_sim=args.kdpp_sim, best_safety=best_safety, safety_utility=util)
     import json
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
 

@@ -169,8 +169,28 @@ def evaluate(pick, eff, tox, membership, X):
 
 
 # --------------------------------------------------------------------------- #
-# STRING similarity S (diversity structure for the k-DPP operator)            #
+# Diversity similarity S for the k-DPP operator                                #
+#                                                                              #
+# S is a MECHANISM/REPRESENTATION similarity, NOT outcome similarity: we want  #
+# the picks to share the (high-efficacy) outcome, so diversity must live in a  #
+# space other than the outcome. Embedding cosine is dense (tunable); STRING is #
+# biological but sparse.                                                       #
 # --------------------------------------------------------------------------- #
+def build_embedding_S(X):
+    """Dense (n,n) similarity from PubMedBERT embeddings: S_ij = (1+cos)/2 in
+    [0,1]. Unit diagonal. Dense -> the k-DPP diversity term varies smoothly, so
+    the quality/diversity trade-off is genuinely tunable (unlike the sparse
+    STRING graph). This is the DEFAULT k-DPP similarity."""
+    X = np.asarray(X, float)
+    norm = np.linalg.norm(X, axis=1, keepdims=True)
+    Xn = X / np.clip(norm, 1e-12, None)
+    cos = Xn @ Xn.T
+    S = 0.5 * (1.0 + np.clip(cos, -1.0, 1.0))
+    np.fill_diagonal(S, 1.0)
+    return S
+
+
+
 def build_string_S(gene_names,
                    edges_path="data/processed/depmap/string_edges_all.parquet"):
     """Dense (n,n) STRING combined-score similarity over a gene panel, built from

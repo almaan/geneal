@@ -39,8 +39,8 @@ _GLOSSARY = """
 <b>Analysis B — diversity / robustness.</b> Operators applied at nomination, layered on a base:<br>
 &bull; <b>none</b> — top-K by quality (concentration-blind).<br>
 &bull; <b>cap</b> — at most <i>c</i> genes per CORUM pathway/complex (hard hedge; bolts onto any method).<br>
-&bull; <b>kdpp</b> — quality-weighted k-DPP with a STRING-derived similarity S (soft diversity).<br><br>
-<b>Representations.</b> PubMedBERT embeddings predict efficacy/toxicity. STRING is a <i>network → a similarity</i> (not a per-gene feature vector), so it powers the k-DPP S; CORUM gives pathway membership for capping. They structure the diversity step; they never predict.
+&bull; <b>kdpp</b> — quality-weighted k-DPP with a <i>mechanism</i> similarity S (soft diversity). S is dense PubMedBERT-embedding cosine by default (tunable), or sparse STRING; <b>never outcome similarity</b> — we want the picks to share the high-efficacy outcome, so diversity must live in mechanism space.<br><br>
+<b>Representations.</b> PubMedBERT embeddings predict efficacy/toxicity <i>and</i> supply the dense k-DPP similarity (two uses of one fingerprint). STRING (a <i>network → a similarity</i>) and CORUM (pathway membership) are not per-gene feature vectors, so they only structure the diversity step; they never predict.
 """
 
 _A_METRICS = [
