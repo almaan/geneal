@@ -110,6 +110,10 @@ def main():
                     help="explicit target ModelIDs (overrides --n-cell-lines)")
     ap.add_argument("--out-root", default="res/runs_ablation")
     ap.add_argument("--run-name", default=None)
+    ap.add_argument("--export-figs", action="store_true",
+                    help="also write vector PDF+PNG of every figure (kaleido). OFF by "
+                         "default -- it is slow (per-figure chromium) and would stall the "
+                         "run; the interactive HTML always renders. Turn on for manuscript figs.")
     args = ap.parse_args()
     import sys
     try:
@@ -245,7 +249,7 @@ def main():
     try:
         from geneal.report.ablation_report import build_ablation_report
         build_ablation_report(df, out / "report.html", scatter=scatter_df, meta=meta,
-                              fig_dir=out / "figs")
+                              fig_dir=(out / "figs") if args.export_figs else None)
         print(f"\nreport -> {out / 'report.html'}")
     except Exception as e:
         import traceback; traceback.print_exc(); print("report skipped:", e)
