@@ -23,6 +23,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# static (vector) figure export for manuscript figures; 0.2.1 is self-contained
+# (bundles its own chromium; >=1.0 needs an external chrome).
+figures = ["kaleido==0.2.1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

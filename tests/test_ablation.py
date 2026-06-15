@@ -56,15 +56,24 @@ def test_run_acquisition_deterministic():
     assert set(g) == set(r)                           # n_rounds=0 -> just init
 
 
-def test_nominate_truncation_respects_known_toxicity():
+def test_nominate_known_respects_quantile_ceiling():
     X, eff, tox, membership = _toy()
     rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
     tau = 0.6
-    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="truncation",
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="known",
                    diversity="none", tau=tau, surr_factory=_factory)
     assert len(sel) == 6
-    # truncation filters on KNOWN toxicity -> every pick is under the ceiling
-    assert all(tox[i] <= tau for i in sel)
+    # 'known' filters on the known-toxicity tau-QUANTILE -> picks below that ceiling
+    thr = float(np.quantile(tox, tau))
+    assert all(tox[i] <= thr + 1e-9 for i in sel)
+
+
+def test_nominate_pred_safety_runs():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="pred",
+                   diversity="none", tau=0.5, surr_factory=_factory)
+    assert len(sel) == 6 and len(set(sel)) == 6
 
 
 def test_diversity_operator_changes_pick():
@@ -82,7 +91,7 @@ def test_diversity_operator_changes_pick():
 def test_evaluate_returns_finite_metrics():
     X, eff, tox, membership = _toy()
     rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
-    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="truncation",
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="known",
                    diversity="cap", tau=0.7, surr_factory=_factory, cap=2)
     m = evaluate(sel, eff, tox, membership, X)
     for key in ("mean_efficacy", "max_efficacy", "mean_toxicity", "concentration",

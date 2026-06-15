@@ -67,6 +67,19 @@ never a prediction embedding — see the note in Analysis B.
 
 ---
 
+## Revision v2 (2026-06-15, per user)
+
+1. \textbf{Two truncation variants.} Safety filter source $\in$ \{none, \texttt{known}, \texttt{pred}\}. The method = (acquisition, filter):
+   \texttt{greedy}=(greedy,none); \texttt{trunc\_known}=(greedy,known oracle ceiling); \texttt{trunc\_pred}=(greedy, predicted-toxicity GP); \texttt{ehvi}=(ehvi, predicted). \texttt{trunc\_known} is the UPPER LIMIT \texttt{trunc\_pred} chases. Analysis A = 7 methods (+random/coreset/typiclust).
+2. \textbf{Two toxicity definitions}, run both, faceted in one report: \texttt{contrast} (one fixed line, reused across all targets; the PRIMARY) and \texttt{aggregate} (common-essential, baseline). Contrast line auto-picked from a RANKED list of 5--10 candidates (most normal-like = fewest strongly-lethal knockouts); run on the top one, keep the list in meta for later.
+3. \textbf{Leakage fix}: common-essential average EXCLUDES the target line; the contrast line is EXCLUDED from the target set.
+4. \textbf{Analysis B bases = \{greedy, truncation, ehvi\}} (all three, no winner-picking) $\times$ \{none, cap, kdpp\} = 9 variants per tox-source.
+5. \textbf{Per-cell-line plots + aggregate}: aggregate efficacy--toxicity tradeoff AND a grid of per-line tradeoff subplots (manuscript subfigures).
+6. \textbf{$\tau$ as a quantile} (scale-free, comparable across the two toxicity definitions): keep genes whose (known or predicted) toxicity is below the $\tau$-quantile. Default $0.5$ = ``safest half''.
+7. k-DPP $S$ = dense PubMedBERT embedding cosine (mechanism, NOT outcome); STRING optional via \texttt{--kdpp-sim}.
+
+---
+
 ## File structure
 ```
 src/geneal/runner/ablation.py        # CREATE: acquisitions + AL loop + nominate + evaluate

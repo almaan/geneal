@@ -30,7 +30,16 @@ from geneal.metrics.portfolio import (pathway_concentration, dropout_robustness,
                                       n_pathways_covered)
 from geneal.metrics.panel import AlphaNDCG
 
-ACQUISITIONS = ("random", "greedy", "coreset", "typiclust", "ehvi")
+# Generic names for representative prior-work acquisitions (not exact
+# reimplementations):
+#   'greedy'   -- quality/effect-driven (UCB on predicted efficacy); the
+#                 quality-only family (e.g. NAIAD).
+#   'farthest' -- farthest-point / coverage diversity (quality-blind).
+#   'cluster'  -- cluster-representative diversity (quality-blind).
+#   'info_div' -- INFORMATIVE-DIVERSE batch: quality-weighted k-DPP at acquisition
+#                 (GP-UCB quality x embedding-cosine diversity). The faithful
+#                 stand-in for informativeness+diversity AL (e.g. IterPert).
+ACQUISITIONS = ("random", "greedy", "farthest", "cluster", "info_div", "ehvi")
 _NEG = -1e9
 
 
@@ -47,34 +56,65 @@ def _default_factory():
 # --------------------------------------------------------------------------- #
 # Acquisition (what to assay each round)                                       #
 # --------------------------------------------------------------------------- #
-def acquire(kind, X, eff, revealed, cand, batch, rng, surr_factory):
+def _ei(mean, std, incumbent):
+    """Expected Improvement over the incumbent (maximization)."""
+    from scipy.stats import norm
+    mean = np.asarray(mean, float); std = np.clip(np.asarray(std, float), 1e-12, None)
+    z = (mean - incumbent) / std
+    return (mean - incumbent) * norm.cdf(z) + std * norm.pdf(z)
+
+
+def acquire(kind, X, eff, revealed, cand, batch, rng, surr_factory, score="ucb"):
     """One round of a single-objective acquisition. Returns `batch` new global
-    indices drawn from `cand` (the unrevealed set). EHVI is handled by
-    run_acquisition (it is intrinsically bivariate)."""
+    indices drawn from `cand` (the unrevealed set). `score` selects the
+    quality-aware rule for kind='greedy': 'ucb' (mu+2 sigma) or 'ei' (expected
+    improvement). EHVI is handled by run_acquisition (it is intrinsically
+    bivariate)."""
     X = np.asarray(X, float)
     cand = list(cand)
     batch = min(batch, len(cand))
     if kind == "random":
         return [int(i) for i in rng.choice(cand, size=batch, replace=False)]
     if kind == "greedy":
-        s = surr_factory().fit(X[revealed], np.asarray(eff)[revealed])
+        eff = np.asarray(eff, float)
+        s = surr_factory().fit(X[revealed], eff[revealed])
         m, sd = s.predict(X[cand])
-        ucb = np.asarray(m) + 2.0 * np.asarray(sd)
-        order = np.argsort(ucb)[::-1][:batch]
+        if score == "ei":
+            a = _ei(m, sd, float(eff[revealed].max()))
+        else:
+            a = np.asarray(m) + 2.0 * np.asarray(sd)
+        order = np.argsort(a)[::-1][:batch]
         return [int(cand[i]) for i in order]
-    if kind in ("coreset", "typiclust"):
-        sel = (CoreSet() if kind == "coreset" else TypiClust())
+    if kind in ("farthest", "cluster"):
+        sel = (CoreSet() if kind == "farthest" else TypiClust())
         local = sel.select(candidate_idx=list(range(len(cand))),
                            X_candidates=X[cand], mean=None, std=None, best=None,
                            q=batch, rng=rng, surrogate=None, acquisition=None,
                            X_train=X[revealed], y_train=np.asarray(eff)[revealed])
+        return [int(cand[i]) for i in local]
+    if kind == "info_div":
+        # informative-diverse batch: quality-weighted k-DPP at acquisition time.
+        # quality = UCB/EI; diversity = dense embedding-cosine S over candidates.
+        from geneal.models.selection import _greedy_map_logdet
+        eff = np.asarray(eff, float)
+        s = surr_factory().fit(X[revealed], eff[revealed])
+        m, sd = s.predict(X[cand])
+        if score == "ei":
+            q = _ei(m, sd, float(eff[revealed].max()))
+        else:
+            q = np.asarray(m) + 2.0 * np.asarray(sd)
+        q = np.asarray(q, float); q = q - q.min() + 1e-6
+        Sc = build_embedding_S(X[cand])
+        L = (q[:, None] * Sc) * q[None, :]
+        L = (L + L.T) / 2 + 1e-9 * np.eye(len(q))
+        local = _greedy_map_logdet(L, batch)
         return [int(cand[i]) for i in local]
     raise ValueError(f"unknown acquisition {kind!r}")
 
 
 def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
                     surr_factory=None, ehvi_samples=32, shortlist=150,
-                    noise=None):
+                    noise=None, score="ucb"):
     """Full active-learning loop for one acquisition. Returns the final revealed
     global indices. Common random numbers: every kind seeds its initial set from
     default_rng(seed).permutation, so kinds are paired per (line, seed)."""
@@ -96,7 +136,7 @@ def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
         if not cand:
             break
         revealed += acquire(kind, X, eff, revealed, cand, batch, acq_rng,
-                            surr_factory)
+                            surr_factory, score=score)
     return revealed
 
 
@@ -109,14 +149,19 @@ _DIV_MODE = {"none": "greedy", "cap": "cap", "kdpp": "dpp"}
 def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
              S=None, surr_factory=None, cap=2, pool=200):
     """Nominate K targets. Fit a final efficacy GP on revealed labels, predict
-    genome-wide; apply the safety filter (none / known-tox<=tau (truncation) /
-    predicted-tox<=tau (ehvi)); then the diversity operator over the top-`pool`
-    eligible candidates (none=top-K, cap=per-pathway, kdpp=k-DPP on STRING S).
+    genome-wide; apply the safety filter; then the diversity operator over the
+    top-`pool` eligible candidates (none=top-K, cap=per-pathway, kdpp=k-DPP on S).
 
-    Safety semantics:
-      truncation -> filter on KNOWN toxicity (common-essential, a priori).
-      ehvi       -> fit a toxicity GP on revealed toxicity labels, filter on the
-                    PREDICTED toxicity (the learned-toxicity regime)."""
+    Safety filter source (`safety`):
+      'none'  -> no filter.
+      'known' -> filter on the KNOWN toxicity (a-priori annotation; the oracle
+                 ceiling). Used by truncation_known.
+      'pred'  -> fit a toxicity GP on revealed toxicity labels, filter on the
+                 PREDICTED toxicity (the learned regime). Used by truncation_pred
+                 and the EHVI method.
+    `tau` is a QUANTILE in [0,1] (scale-free, comparable across toxicity
+    definitions): keep genes whose toxicity is at/below the tau-quantile of the
+    relevant toxicity distribution (tau=0.5 = 'the safest half')."""
     surr_factory = surr_factory or _default_factory
     X = np.asarray(X, float)
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
@@ -124,11 +169,13 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
 
     q = np.asarray(surr_factory().fit(X[revealed], eff[revealed]).predict(X)[0],
                    dtype=float).copy()
-    if safety == "truncation":
-        q[tox > tau] = _NEG
-    elif safety == "ehvi":
-        m_tox = surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0]
-        q[np.asarray(m_tox) > tau] = _NEG
+    if safety == "known":
+        thr = float(np.quantile(tox, tau))
+        q[tox > thr] = _NEG
+    elif safety == "pred":
+        m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0])
+        thr = float(np.quantile(m_tox, tau))
+        q[m_tox > thr] = _NEG
     elif safety != "none":
         raise ValueError(f"unknown safety {safety!r}")
 
@@ -162,7 +209,10 @@ def evaluate(pick, eff, tox, membership, X):
         "max_efficacy": float(np.max(eff[pick])),
         "mean_toxicity": float(np.mean(tox[pick])),
         "concentration": float(pathway_concentration(pick, membership)),
-        "robustness": float(dropout_robustness(pick, membership, eff)),
+        # robustness is a fraction-of-VALUE-surviving; value must be non-negative
+        # (raw lethality can go negative for growth-promoting knockouts), else the
+        # ratios blow past 1. Clip at 0.
+        "robustness": float(dropout_robustness(pick, membership, np.clip(eff, 0.0, None))),
         "n_pathways": int(n_pathways_covered(pick, membership)),
         "alpha_ndcg": float(andcg),
     }

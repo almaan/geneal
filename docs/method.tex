@@ -192,19 +192,25 @@ uncertainty: it is large either when the mean clearly beats $y^+$, or when the g
 uncertain enough to plausibly beat it. Higher $=$ more worth measuring.
 
 \paragraph{Baseline acquisitions we compare against.} To show the model-driven scores above
-are actually buying us something, we race them against three simpler rules that ignore the
-GP's \emph{quality} signal:
+are actually buying us something, we race them against representative prior-work acquisitions
+(generic names, not exact reimplementations of any one paper):
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
-\item \textbf{Random}: measure a uniformly random batch each round. The floor any useful
-method must beat.
-\item \textbf{CoreSet} (greedy $k$-center): repeatedly pick the gene whose fingerprint is
-\emph{farthest} from everything measured so far. Pure geometric spread, quality-blind.
-\item \textbf{TypiClust}: cluster the candidates in fingerprint space and pick the most
-``typical'' (densest-neighbourhood) gene from each cluster. Also diversity-only.
+\item \textbf{random}: a uniformly random batch each round. The floor any useful method must beat.
+\item \textbf{farthest} (greedy $k$-center / coverage): repeatedly pick the gene whose
+fingerprint is \emph{farthest} from everything measured so far. Pure geometric spread,
+quality-blind.
+\item \textbf{cluster} (density): cluster the candidates in fingerprint space and pick the
+most ``typical'' (densest-neighbourhood) gene from each cluster. Also diversity-only.
+\item \textbf{info\_div} (informative-diverse): a quality-weighted $k$-DPP \emph{at
+acquisition time} --- quality $=$ UCB, similarity $=$ embedding cosine --- so the batch is
+both informative \emph{and} spread. This is the faithful stand-in for methods that combine
+model informativeness with diversity in a learned representation (e.g.\ IterPert); the
+\texttt{greedy} rule above is the stand-in for the quality/effect-only family (e.g.\ NAIAD).
 \end{itemize}
-CoreSet and TypiClust are the selection rules of a representative prior diversity-first
-method (IterPert); including them tests whether \emph{quality-aware} acquisition (UCB / EHVI)
-beats \emph{quality-blind} diversity at finding safe, potent targets.
+Including these tests whether \emph{quality-aware} acquisition (UCB / EHVI / info\_div) beats
+\emph{quality-blind} diversity, and whether any acquisition-time diversity helps the
+\emph{safety} axis (it does not --- diversity of what you \emph{measure} is not safety of what
+you \emph{nominate}).
 
 \section{Step 3: choosing a non-redundant batch}
 
