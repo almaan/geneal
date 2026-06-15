@@ -32,13 +32,15 @@ PANEL="${PANEL-data/processed/depmap/panel_5k.txt}"
 PANEL_ARG=""; [ -n "$PANEL" ] && PANEL_ARG="--panel $PANEL"
 NLINES="${NLINES:-6}"; SEEDS="${SEEDS:-0 1 2}"; K="${K:-30}"
 ROUNDS="${ROUNDS:-8}"; BATCH="${BATCH:-10}"; NINIT="${NINIT:-40}"; TAU="${TAU:-0.5}"
+# JOINT=1 -> learned-safety methods use the joint multitask GP. Empty = independent (default).
+JOINT_ARG=""; [ -n "${JOINT:-}" ] && JOINT_ARG="--joint-gp"
 
 echo "node=$(hostname) cpus=${SLURM_CPUS_PER_TASK} job=${SLURM_JOB_ID}"
 python -c "import geneal" || { echo "geneal import failed"; exit 1; }
 echo "ablation: panel='${PANEL:-FULL GENOME}' ${NLINES} lines x [${SEEDS}] seeds, K=${K}, AL ${ROUNDS}x${BATCH}"
 
 python -u scripts/run_ablation.py \
-    --embeddings "$EMB" $PANEL_ARG \
+    --embeddings "$EMB" $PANEL_ARG $JOINT_ARG \
     --n-cell-lines "$NLINES" --seeds $SEEDS --K "$K" \
     --n-initial "$NINIT" --n-rounds "$ROUNDS" --batch "$BATCH" --tau "$TAU" \
     --out-root res/runs_ablation
