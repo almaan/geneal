@@ -65,12 +65,14 @@ ACQ_LABELS = {"random": "random", "greedy": "greedy/UCB", "farthest": "farthest"
               "cluster": "cluster", "info_div": "info-diverse", "ehvi": "EHVI",
               "greedy_safe": "greedy+safe", "ehvi_safe": "EHVI+safe",
               "known_safe": "known-safe (upper bd)"}
-OP_ORDER = ["none", "kdpp_emb", "kdpp_corum"]   # 'cap' excluded (not a general baseline)
+OP_ORDER = ["none", "kdpp_string", "kdpp_corum"]   # embedding-S k-DPP & 'cap' excluded from B
 OP_LABELS = {"none": "none", "cap": "cap (CORUM)", "kdpp_emb": "k-DPP · embedding",
-             "kdpp_corum": "k-DPP · CORUM"}
-OP_SHORT = {"none": "none", "cap": "cap", "kdpp_emb": "kdpp·emb", "kdpp_corum": "kdpp·CORUM"}
-OP_MARK = {"none": "o", "cap": "s", "kdpp_emb": "D", "kdpp_corum": "^"}
-OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77", "kdpp_corum": "#e0a32e"}
+             "kdpp_string": "k-DPP · STRING", "kdpp_corum": "k-DPP · CORUM"}
+OP_SHORT = {"none": "none", "cap": "cap", "kdpp_emb": "kdpp·emb",
+            "kdpp_string": "kdpp·STRING", "kdpp_corum": "kdpp·CORUM"}
+OP_MARK = {"none": "o", "cap": "s", "kdpp_emb": "D", "kdpp_string": "v", "kdpp_corum": "^"}
+OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77",
+            "kdpp_string": "#a855f7", "kdpp_corum": "#e0a32e"}
 # B bases = the 4 safety-aware Section-A methods (keys), displayed with A's labels.
 B_BASE_ORDER = ["trunc_pred", "greedy_safe", "ehvi_trunc", "ehvi_safe"]
 B_BASE_COLOR = {"trunc_pred": "#2e6f95", "greedy_safe": "#7eb6d9",
@@ -87,6 +89,13 @@ _A_METRICS = [("mean_efficacy", "Mean efficacy"),
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
               ("n_pathways", "Distinct pathways↑"), ("mean_efficacy", "Mean efficacy↑"),
               ("mean_toxicity", "Mean toxicity↓")]
+# STRING table: pairwise-spread metrics (no discrete groups)
+_B_STRING_METRICS = [("string_redundancy", "Mean pairwise STRING sim↓"),
+                     ("string_max_sim", "Max pairwise STRING sim↓"),
+                     ("mean_efficacy", "Mean efficacy↑"), ("mean_toxicity", "Mean toxicity↓")]
+# which operators each source-matched table shows
+_B_CORUM_OPS = ["none", "kdpp_corum"]
+_B_STRING_OPS = ["none", "kdpp_string"]
 
 
 def _ci(x):
@@ -410,15 +419,15 @@ def _round_curves(rounds, src, fig_dir):
 
 
 # ---- Section B ---------------------------------------------------------------
-def _b_table(d):
-    cols = [lbl for _, lbl in _B_METRICS]
+def _b_table(d, ops, metrics):
+    cols = [lbl for _, lbl in metrics]
     rows = []
     for base in B_BASE_ORDER:
-        for op in OP_ORDER:
+        for op in ops:
             g = d[(d.base == base) & (d.operator == op)]
-            if not len(g):
+            if not len(g) or metrics[0][0] not in g.columns:
                 continue
-            cells = [_cell(*_ci(g[c])) for c, _ in _B_METRICS]
+            cells = [_cell(*_ci(g[c])) for c, _ in metrics]
             rows.append({"label": f"{B_BASE_SHORT.get(base, base)} + {OP_LABELS.get(op, op)}",
                          "cells": cells})
     return cols, rows
@@ -622,14 +631,22 @@ _FACET_TMPL = """
 
 <h3>B &middot; Diversity / robustness</h3>
 <div class="key">{{ headline_b|safe }}</div>
-<div class="note">Operators none → cap → kdpp on three bases (greedy / truncation / ehvi). k-DPP similarity = {{ kdpp_sim }} (mechanism space, never outcome).</div>
+<div class="note">Soft diversity (k-DPP) layered on the four safety-aware bases. Results split by external knowledge source: CORUM protein complexes vs the STRING network. The diversity operator (k-DPP·source) vs none is the comparison within each table.</div>
+<h4>B.1 &middot; CORUM (protein-complex) diversity</h4>
+<div class="note">Concentration / robustness / distinct-complexes measured over CORUM complexes; rows = bases × {none, k-DPP·CORUM}.</div>
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in b_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex }}</code></pre></details></div>
+<h4>B.2 &middot; STRING (network) diversity</h4>
+<div class="note">Mean / max pairwise STRING similarity of the portfolio (↓ = more mechanistically spread); rows = bases × {none, k-DPP·STRING}.</div>
+<div class="card"><table>
+<thead><tr><th>base + operator</th>{% for h in bs_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in bs_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bs_latex }}</code></pre></details></div>
 <div class="card">{{ b_bar|safe }}</div>
-<h3>B &middot; Efficacy vs concentration</h3>
-<div class="note">Each line a base; markers are operators (none / cap / k-DPP·embedding / k-DPP·CORUM). Left = better hedged; high = efficacy retained. The k-DPP·embedding vs k-DPP·CORUM gap is the similarity-source ablation (learned vs external knowledge).</div>
+<h3>B &middot; Efficacy vs concentration (CORUM)</h3>
+<div class="note">Each line a base; markers are operators (none / k-DPP·STRING / k-DPP·CORUM). Left = better hedged (lower CORUM concentration); high = efficacy retained.</div>
 <div class="card">{{ b_eff_conc|safe }}</div>
 {% if failure_sim %}
 <h3>B &middot; Value of diversity — pathway-failure simulation</h3>
@@ -676,7 +693,7 @@ _GLOSSARY = """
 <b>Safety rules (Analysis A).</b>
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>filter · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>filter · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>The known-toxicity filter is the limit the learned rules chase.</i><br><br>
 <b>Filter timing (end-stage vs per-round).</b> The filter can be applied only to the final shortlist (<i>end-stage</i>, <code>nom</code>) or at <i>every acquisition round</i> (<code>RT</code>), restricting each round to genes believed safe — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination remain distinct stages; per-round filtering constrains both.<br><br>
-<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · CORUM</b>: same, but with the <i>external</i> CORUM pathway-matrix (Jaccard co-membership) similarity. Neither is outcome similarity — the embedding-vs-CORUM gap is the similarity-source ablation. Layered on the four safety-aware bases (G·nom·P / G·RT·P / E·nom·P / E·RT·P). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
+<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · STRING</b>: external STRING combined-score network similarity. &bull; <b>k-DPP · CORUM</b>: external CORUM protein-complex (Jaccard co-membership) similarity. None is outcome similarity — the embedding-vs-STRING-vs-CORUM comparison is the similarity-source ablation (learned vs two external knowledge graphs, dense → sparse). Layered on the four safety-aware bases (G·nom·P / G·RT·P / E·nom·P / E·RT·P). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
 <b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).
 """
 
@@ -696,7 +713,9 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
     for src in tox_sources:
         d = df[df.tox_source == src]
         dA, dB = d[d.analysis == "A"], d[d.analysis == "B"]
-        a_cols, a_rows = _table_A(dA); b_cols, b_rows = _b_table(dB)
+        a_cols, a_rows = _table_A(dA)
+        b_cols, b_rows = _b_table(dB, _B_CORUM_OPS, _B_METRICS)          # CORUM table
+        bs_cols, bs_rows = _b_table(dB, _B_STRING_OPS, _B_STRING_METRICS)  # STRING table
         assayed_img, (asy_cols, asy_rows) = _assayed_panel(assayed, src, fig_dir)
         rounds_nom, rounds_assayed = _round_curves(rounds, src, fig_dir)
         block = Environment(loader=BaseLoader()).from_string(_FACET_TMPL).render(
@@ -715,11 +734,14 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             a_latex=_latex_table("method", a_cols, a_rows,
                                  f"Safety vs efficacy ({src} toxicity).", f"A_{src}"),
             b_latex=_latex_table("base + operator", b_cols, b_rows,
-                                 f"Diversity / robustness ({src} toxicity).", f"B_{src}"),
+                                 f"Diversity -- CORUM complexes ({src} toxicity).", f"Bcorum_{src}"),
+            bs_latex=_latex_table("base + operator", bs_cols, bs_rows,
+                                  f"Diversity -- STRING network ({src} toxicity).", f"Bstring_{src}"),
             asy_latex=_latex_table("acquisition", asy_cols, asy_rows,
                                    f"Assayed-set quality ({src} toxicity).", f"assayed_{src}")
                        if asy_rows else "",
             kdpp_sim=kdpp_sim, b_cols=b_cols, b_rows=b_rows,
+            bs_cols=bs_cols, bs_rows=bs_rows,
             b_bar=_b_bar(dB, src, fig_dir), b_eff_conc=_b_eff_conc(dB, src, fig_dir),
             failure_sim=_failure_curve(dB, src, fig_dir))
         facets.append({"block": block, "headline_a": _headline_A(dA)})

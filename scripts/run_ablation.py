@@ -42,6 +42,18 @@ from geneal.metrics.portfolio import dropout_curve
 from geneal.models.multiobjective import pareto_indices
 
 
+def _string_spread(sel, S):
+    """STRING pairwise-spread metrics for a portfolio: mean & max pairwise STRING
+    similarity among the picks (lower = more mechanistically spread/hedged)."""
+    sel = list(sel)
+    if S is None or len(sel) < 2:
+        return dict(string_redundancy=float("nan"), string_max_sim=float("nan"))
+    sub = S[np.ix_(sel, sel)]
+    iu = np.triu_indices(len(sel), 1)
+    pair = sub[iu]
+    return dict(string_redundancy=float(pair.mean()), string_max_sim=float(pair.max()))
+
+
 def _pareto_recall(sel, eff, tox, pareto_set):
     """(n hit, recall): how many of the nominees lie on the TRUE (eff,-tox) Pareto
     front, and the fraction of that front recovered."""
@@ -95,10 +107,10 @@ B_BASES = [
 # kdpp splits by the k-DPP similarity S: learned embedding cosine vs external
 # CORUM pathway matrix (the similarity ablation).
 DIVERSITY_OPS = [
-    ("none",       "none", None),
-    ("kdpp_emb",   "kdpp", "embedding"),   # quality-weighted k-DPP, embedding-cosine S
-    ("kdpp_corum", "kdpp", "corum"),       # k-DPP, external CORUM pathway-matrix S
-]   # (per-pathway 'cap' is implemented in HedgedSelect but excluded -- not a general baseline)
+    ("none",        "none", None),
+    ("kdpp_string", "kdpp", "string"),     # k-DPP, external STRING network S
+    ("kdpp_corum",  "kdpp", "corum"),      # k-DPP, external CORUM complex S
+]   # (embedding-S k-DPP and per-pathway 'cap' are implemented but excluded from B)
 MAX_DROP = 5   # failure-simulation horizon (# pathways dropped)
 TOX_SOURCES = ["contrast", "aggregate"]
 
@@ -233,14 +245,17 @@ def main():
         tox = {src: toxicity_vector(ge, ds.gene_names, src, target_line=cl,
                                     contrast_line=contrast_line, thresh=args.thresh)
                for src in TOX_SOURCES}
-        return X, eff, mem, tox
+        return X, eff, mem, tox, ds.gene_names
 
     B_ACQ = sorted({acq for _, acq, _ in B_BASES})   # acquisitions Analysis B needs
     rows, scatters, assayed_rows, round_rows = [], [], [], []
     for cl in lines:
-        Xa, effa, mema, toxa_by_src = build_line(emb_a, cl)          # A: full genome
-        Xb, effb, memb, toxb_by_src = build_line(emb_b, cl)          # B: subset
-        S_by_src = {"embedding": build_embedding_S(Xb),             # N^2 only on the B subset
+        Xa, effa, mema, toxa_by_src, _ = build_line(emb_a, cl)       # A: full genome
+        Xb, effb, memb, toxb_by_src, names_b = build_line(emb_b, cl)  # B: subset
+        # k-DPP similarity sources (N^2 only on the B subset): learned embedding
+        # cosine, external STRING network, external CORUM complexes.
+        S_by_src = {"embedding": build_embedding_S(Xb),
+                    "string": build_string_S(names_b, args.string),
                     "corum": build_corum_S(memb, len(effb))}
         print(f"[{cl}] A={len(effa)} genes, B={len(effb)} genes")
 
@@ -322,12 +337,13 @@ def main():
                         m = evaluate(sel, effb, toxb, memb, tox_ceiling=ceil_b)
                         dc = dropout_curve(sel, memb, effb, MAX_DROP)
                         p_hit, p_rec = _pareto_recall(sel, effb, toxb, pareto_b)
+                        sm = _string_spread(sel, S_by_src["string"])   # STRING pairwise spread
                         rows.append(dict(analysis="B", tox_source=src,
                                          method=f"{base_label}+{op_label}", base=base_label,
                                          operator=op_label, acq=acq_key, safety=safety,
                                          cell_line=cl, seed=seed,
                                          n_novel=len(set(sel) - set(rev_final)),
-                                         pareto_hit=p_hit, pareto_recall=p_rec, **m,
+                                         pareto_hit=p_hit, pareto_recall=p_rec, **m, **sm,
                                          **{f"drop_{i}": dc[i] for i in range(len(dc))}))
         print(f"[{cl}] done ({len(args.seeds)} seeds x {len(TOX_SOURCES)} tox-sources)")
 
