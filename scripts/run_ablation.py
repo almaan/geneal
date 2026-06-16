@@ -325,11 +325,11 @@ def main():
             print(f"  {label:12s} eff {e:.3f}+/-{ec:.3f}  tox {t:.3f}+/-{tc:.3f}")
         print("[B: diversity / robustness]")
         for base_label, _, _ in B_BASES:
-            for op in DIVERSITY_OPS:
-                sub = d[(d.analysis == "B") & (d.base == base_label) & (d.operator == op)]
+            for op_label, _, _ in DIVERSITY_OPS:
+                sub = d[(d.analysis == "B") & (d.base == base_label) & (d.operator == op_label)]
                 c, _ = _mean_ci(sub["concentration"]); r, _ = _mean_ci(sub["robustness"])
                 e, _ = _mean_ci(sub["mean_efficacy"])
-                print(f"  {base_label:11s}+{op:5s} conc {c:.3f} robust {r:.3f} eff {e:.3f}")
+                print(f"  {base_label:11s}+{op_label:11s} conc {c:.3f} robust {r:.3f} eff {e:.3f}")
 
     try:
         from geneal.report.ablation_report import build_ablation_report
