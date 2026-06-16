@@ -98,10 +98,12 @@ ANALYSIS_A = [
 # nomination filtering and per-round filtering (all predicted-tox). Diversity
 # operators are layered on each. (base_key, acq_key, nominate_safety).
 B_BASES = [
-    ("trunc_pred",  "greedy",      "pred"),   # G·nom·P  (greedy + nomination filter)
-    ("greedy_safe", "greedy_safe", "pred"),   # G·RT·P   (greedy + per-round filter)
-    ("ehvi_trunc",  "ehvi",        "pred"),   # E·nom·P  (EHVI + nomination filter)
-    ("ehvi_safe",   "ehvi_safe",   "pred"),   # E·RT·P   (EHVI + per-round filter)
+    ("greedy",      "greedy",      "none"),   # greedy, NO filter
+    ("ehvi",        "ehvi",        "none"),   # EHVI, NO filter
+    ("trunc_pred",  "greedy",      "pred"),   # greedy + nomination filter
+    ("greedy_safe", "greedy_safe", "pred"),   # greedy + per-round filter
+    ("ehvi_trunc",  "ehvi",        "pred"),   # EHVI + nomination filter
+    ("ehvi_safe",   "ehvi_safe",   "pred"),   # EHVI + per-round filter
 ]
 # Section-B diversity operators. (op_label, mode, similarity-source).
 # kdpp splits by the k-DPP similarity S: learned embedding cosine vs external

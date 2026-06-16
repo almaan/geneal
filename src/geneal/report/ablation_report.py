@@ -43,20 +43,21 @@ COLORS = {
     "farthest": "#8e6fb0", "cluster": "#e0a32e", "info_div": "#c2548a",
     "ehvi_pareto": "#0e7c66",
 }
-# Compact labels (used in figures AND tables; the grammar is spelled out in the
-# glossary). G=greedy acq, E=EHVI acq; nom=nomination-only truncation, RT=per-round
-# truncation; K=known tox, P=predicted tox.
+# Labels: acquisition spelled out (greedy / EHVI); filter codes nom=nomination-only,
+# RT=per-round; K=known tox, P=predicted tox (spelled out in the glossary).
 LABELS = {
-    "greedy": "greedy", "trunc_known": "G·nom·K", "trunc_pred": "G·nom·P",
-    "greedy_safe": "G·RT·P", "known_safe": "G·RT·K (upper bd)",
-    "ehvi": "EHVI", "ehvi_pareto": "EHVI·Pareto", "ehvi_trunc": "E·nom·P",
-    "ehvi_safe": "E·RT·P", "random": "random", "farthest": "farthest",
-    "cluster": "cluster", "info_div": "info-div",
+    "greedy": "greedy", "trunc_known": "greedy · nom · known",
+    "trunc_pred": "greedy · nom · pred", "greedy_safe": "greedy · per-round · pred",
+    "known_safe": "greedy · per-round · known (upper bd)",
+    "ehvi": "EHVI", "ehvi_pareto": "EHVI · Pareto-nom",
+    "ehvi_trunc": "EHVI · nom · pred", "ehvi_safe": "EHVI · per-round · pred",
+    "random": "random", "farthest": "farthest", "cluster": "cluster",
+    "info_div": "info-diverse",
 }
-# grouped by regime so one table serves both discussions:
-# no-filter (no-threshold regime) first, then filtered (threshold regime).
-A_ORDER = ["greedy", "ehvi", "ehvi_pareto", "random", "farthest", "cluster", "info_div",
-           "trunc_known", "known_safe", "trunc_pred", "greedy_safe", "ehvi_trunc", "ehvi_safe"]
+# ordered: baselines, then all greedy variants, then all EHVI variants.
+A_ORDER = ["random", "farthest", "cluster", "info_div",
+           "greedy", "trunc_known", "trunc_pred", "greedy_safe", "known_safe",
+           "ehvi", "ehvi_pareto", "ehvi_trunc", "ehvi_safe"]
 COLORS.update({"greedy_safe": "#b23a55", "ehvi_safe": "#11806080", "known_safe": "#0b3d91"})
 # acquisitions (for the assayed-set panel + per-round curves)
 ACQ_ORDER = ["random", "greedy", "farthest", "cluster", "info_div", "ehvi",
@@ -73,19 +74,22 @@ OP_SHORT = {"none": "none", "cap": "cap", "kdpp_emb": "kdpp·emb",
 OP_MARK = {"none": "o", "cap": "s", "kdpp_emb": "D", "kdpp_string": "v", "kdpp_corum": "^"}
 OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77",
             "kdpp_string": "#a855f7", "kdpp_corum": "#e0a32e"}
-# B bases = the 4 safety-aware Section-A methods (keys), displayed with A's labels.
-B_BASE_ORDER = ["trunc_pred", "greedy_safe", "ehvi_trunc", "ehvi_safe"]
-B_BASE_COLOR = {"trunc_pred": "#2e6f95", "greedy_safe": "#7eb6d9",
-                "ehvi_trunc": "#1b9e77", "ehvi_safe": "#13634a"}
-B_BASE_SHORT = {"trunc_pred": "G·nom·P", "greedy_safe": "G·RT·P",
-                "ehvi_trunc": "E·nom·P", "ehvi_safe": "E·RT·P"}
+# B bases = unfiltered greedy/EHVI + the 4 safety-aware methods (keys -> A labels).
+# greedy variants first, then EHVI variants
+B_BASE_ORDER = ["greedy", "trunc_pred", "greedy_safe", "ehvi", "ehvi_trunc", "ehvi_safe"]
+B_BASE_COLOR = {"greedy": "#d1495b", "ehvi": "#9aa0a6", "trunc_pred": "#2e6f95",
+                "greedy_safe": "#7eb6d9", "ehvi_trunc": "#1b9e77", "ehvi_safe": "#13634a"}
+B_BASE_SHORT = {"greedy": "greedy", "ehvi": "EHVI", "trunc_pred": "greedy·nom·P",
+                "greedy_safe": "greedy·RT·P", "ehvi_trunc": "EHVI·nom·P",
+                "ehvi_safe": "EHVI·RT·P"}
 
-_A_METRICS = [("mean_efficacy", "Mean efficacy"),
-              ("mean_efficacy_safe", "Mean efficacy (permissible)"),
-              ("max_efficacy", "Max efficacy"), ("mean_toxicity", "Mean toxicity"),
-              ("n_safe", "# safe (of K)"), ("n_novel", "# novel (of K)"),
-              ("hypervolume", "Hypervolume (eff,−tox)"),
-              ("pareto_recall", "Pareto recall↑")]
+_A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy"),
+                   ("mean_efficacy_safe", "Mean efficacy (permissible)"),
+                   ("max_efficacy", "Max efficacy"), ("mean_toxicity", "Mean toxicity"),
+                   ("n_safe", "# safe (of K)")]
+_A_DIAG_METRICS = [("n_novel", "# novel (of K)"),
+                   ("hypervolume", "Hypervolume (eff,−tox)"),
+                   ("pareto_recall", "Pareto recall↑")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
               ("n_pathways", "Distinct pathways↑"), ("mean_efficacy", "Mean efficacy↑"),
               ("mean_toxicity", "Mean toxicity↓")]
@@ -142,6 +146,13 @@ def _despine(ax):
         ax.spines[s].set_visible(False)
 
 
+def _legend_out(ax, fontsize=8, **kw):
+    """Place the legend OUTSIDE the axes (upper-left of the right margin) so it
+    never overlaps data. _emit saves with bbox_inches='tight' so it's captured."""
+    ax.legend(frameon=False, fontsize=fontsize, loc="upper left",
+              bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0, **kw)
+
+
 def _ceiling(scatter, src, tau, tau_mode="absolute", cell_line=None):
     """The toxicity ceiling for the dashed line. 'absolute': the bar IS tau (a
     Chronos-scale value). 'quantile': tau-quantile of the candidate true-toxicity
@@ -189,7 +200,7 @@ def _draw_tradeoff(ax, d, methods, ceiling, tau, legend=True):
     ax.set_xlabel("mean toxicity  (← safer)")
     ax.set_ylabel("mean efficacy  (↑ more potent)")
     if legend:
-        ax.legend(frameon=False, fontsize=8, loc="upper right", ncol=2)
+        _legend_out(ax, fontsize=8, ncol=1)
 
 
 def _tradeoff_points(dA, src, scatter, tau, tau_mode, fig_dir):
@@ -265,9 +276,9 @@ def _gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir):
     return {"agg": agg, "per": per}
 
 
-def _table_A(d):
+def _table_A(d, metric_set):
     methods = [m for m in A_ORDER if m in set(d.method)]
-    metrics = [(c, lbl) for c, lbl in _A_METRICS if c in d.columns]
+    metrics = [(c, lbl) for c, lbl in metric_set if c in d.columns]
     rows = []
     for m in methods:
         cells = [_cell(*_ci(d[d.method == m][c])) for c, _ in metrics]
@@ -288,9 +299,9 @@ def _safety_bar(dA, src, fig_dir):
     ax.bar(x, safe, 0.62, color="#1b9e77", label="permissible (tox ≤ τ)")
     ax.bar(x, toxic, 0.62, bottom=safe, color="#d1495b", label="over threshold (tox > τ)")
     ax.set_xticks(x); ax.set_xticklabels([LABELS.get(m, m) for m in methods],
-                                          rotation=30, ha="right", fontsize=8)
+                                          rotation=55, ha="right", fontsize=7)
     _despine(ax); ax.set_ylabel("nominees (count of K)")
-    ax.legend(frameon=False, fontsize=9, loc="upper right")
+    _legend_out(ax, fontsize=9)
     fig.tight_layout()
     return _emit(fig, fig_dir, f"safety_count_{src}")
 
@@ -315,7 +326,7 @@ def _final_k_bars(dA, src, fig_dir):
         ax.bar(range(len(methods)), means, yerr=errs, color=cols, capsize=2,
                error_kw=dict(lw=1, ecolor="#444"))
         ax.set_xticks(range(len(methods)))
-        ax.set_xticklabels([LABELS.get(m, m) for m in methods], rotation=40, ha="right", fontsize=7)
+        ax.set_xticklabels([LABELS.get(m, m) for m in methods], rotation=55, ha="right", fontsize=7)
         ax.set_title(lab, fontsize=10); _despine(ax)
     fig.tight_layout()
     return _emit(fig, fig_dir, f"final_k_{src}")
@@ -350,7 +361,7 @@ def _admission_curve(scatter, src, tau, tau_mode, fig_dir):
     _despine(ax)
     ax.set_xlabel("safety threshold τ  (toxicity ceiling)")
     ax.set_ylabel("fraction of K nominees admitted (tox ≤ τ)")
-    ax.set_ylim(-0.02, 1.02); ax.legend(frameon=False, fontsize=8, loc="lower right")
+    ax.set_ylim(-0.02, 1.02); _legend_out(ax, fontsize=8)
     return _emit(fig, fig_dir, f"admission_{src}")
 
 
@@ -369,12 +380,12 @@ def _assayed_panel(assayed, src, fig_dir):
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.2))
     a1.bar(range(len(accs)), nsafe, color="#1b9e77")
     a1.set_xticks(range(len(accs))); a1.set_xticklabels([ACQ_LABELS.get(a, a) for a in accs],
-                                                        rotation=30, ha="right", fontsize=8)
+                                                        rotation=55, ha="right", fontsize=7)
     a1.set_ylabel(f"# assayed that are safe (of ~{int(np.nanmean(nass)) if nass else 0})")
     a1.set_title("safe genes collected", fontsize=10); _despine(a1)
     a2.bar(range(len(accs)), mtox, color="#d1495b")
     a2.set_xticks(range(len(accs))); a2.set_xticklabels([ACQ_LABELS.get(a, a) for a in accs],
-                                                        rotation=30, ha="right", fontsize=8)
+                                                        rotation=55, ha="right", fontsize=7)
     a2.set_ylabel("mean toxicity of assayed set"); a2.set_title("toxicity of collected data", fontsize=10)
     _despine(a2)
     fig.tight_layout()
@@ -405,7 +416,9 @@ def _round_curves(rounds, src, fig_dir):
                 ax.plot(agg.index, agg.values, "-o", ms=3, lw=1.4,
                         color=COLORS.get(m, "#888"), label=LABELS.get(m, m))
             _despine(ax); ax.set_xlabel("AL round"); ax.set_ylabel(ylab)
-        axes[0].legend(frameon=False, fontsize=6.5, ncol=2, loc="best")
+        h, lab = axes[0].get_legend_handles_labels()
+        fig.legend(h, lab, frameon=False, fontsize=7, loc="lower center",
+                   ncol=min(5, len(lab)), bbox_to_anchor=(0.5, -0.06))
         fig.tight_layout()
         return _emit(fig, fig_dir, name)
 
@@ -448,7 +461,7 @@ def _b_bar(d, src, fig_dir):
     ax.bar(x + w / 2, rob, w, color="#1b9e77", label="robustness ↑")
     ax.set_xticks(x); ax.set_xticklabels(labels, rotation=30, ha="right")
     _despine(ax); ax.set_ylabel("metric value")
-    ax.legend(frameon=False, fontsize=9)
+    _legend_out(ax, fontsize=9)
     fig.tight_layout()
     return _emit(fig, fig_dir, f"diversity_bar_{src}")
 
@@ -473,7 +486,7 @@ def _b_eff_conc(d, src, fig_dir):
     _despine(ax)
     ax.set_xlabel("pathway concentration  (← better hedged)")
     ax.set_ylabel("mean efficacy  (↑ more potent)")
-    ax.legend(frameon=False, fontsize=9, title="base")
+    _legend_out(ax, fontsize=9, title="base")
     fig.tight_layout()
     return _emit(fig, fig_dir, f"eff_vs_conc_{src}")
 
@@ -497,7 +510,7 @@ def _filter_timing_curve(rounds, src, fig_dir):
                     color=("#2e6f95" if "per-round" in nm else "#9aa0a6"), label=nm)
         _despine(ax); ax.set_title(f"{lab} acquisition", fontsize=10)
         ax.set_xlabel("AL round"); ax.set_ylabel("permissible efficacy ↑")
-        ax.legend(frameon=False, fontsize=8)
+        _legend_out(ax, fontsize=8)
     fig.tight_layout()
     return _emit(fig, fig_dir, f"filter_timing_{src}")
 
@@ -525,7 +538,7 @@ def _failure_curve(dB, src, fig_dir):
     ax.set_xlabel("# most-valuable pathways eliminated")
     ax.set_ylabel("portfolio value retained")
     ax.set_title(f"base = {B_BASE_SHORT.get(base, base)}", fontsize=10)
-    ax.legend(frameon=False, fontsize=8)
+    _legend_out(ax, fontsize=8)
     fig.tight_layout()
     return _emit(fig, fig_dir, f"failure_sim_{src}")
 
@@ -603,11 +616,18 @@ _FACET_TMPL = """
 <div class="note">The nominated top-{{ cloudK }} shortlist scored on its true values (mean over lines × seeds, 95% CI). Permissible efficacy = mean efficacy among picks below the τ ceiling.</div>
 <div class="card">{{ final_k|safe }}</div>
 {% endif %}
-<h3>A &middot; Method table</h3>
+<h3>A &middot; Method table (main)</h3>
+<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants.</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details></div>
+<h3>A &middot; Diagnostics</h3>
+<div class="note">Secondary / diagnostic quantities — # novel (unassayed) nominees, nominee hypervolume, and Pareto recall.</div>
+<div class="card"><table>
+<thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex }}</code></pre></details></div>
 {% if assayed_img %}
 <h3>A &middot; Assayed set — quality of the genes actually measured</h3>
 <div class="note">Per <b>acquisition</b> (not nomination): of the ~120 genes measured during the loop, how many are safe and how toxic the collected data is. Tests whether EHVI / constrained ("+safe") acquisition gathers safer data than greedy.</div>
@@ -713,7 +733,8 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
     for src in tox_sources:
         d = df[df.tox_source == src]
         dA, dB = d[d.analysis == "A"], d[d.analysis == "B"]
-        a_cols, a_rows = _table_A(dA)
+        a_cols, a_rows = _table_A(dA, _A_MAIN_METRICS)
+        ad_cols, ad_rows = _table_A(dA, _A_DIAG_METRICS)
         b_cols, b_rows = _b_table(dB, _B_CORUM_OPS, _B_METRICS)          # CORUM table
         bs_cols, bs_rows = _b_table(dB, _B_STRING_OPS, _B_STRING_METRICS)  # STRING table
         assayed_img, (asy_cols, asy_rows) = _assayed_panel(assayed, src, fig_dir)
@@ -731,6 +752,9 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             assayed_img=assayed_img, asy_cols=asy_cols, asy_rows=asy_rows,
             rounds_nom=rounds_nom, rounds_assayed=rounds_assayed,
             filter_timing=_filter_timing_curve(rounds, src, fig_dir),
+            ad_cols=ad_cols, ad_rows=ad_rows,
+            ad_latex=_latex_table("method", ad_cols, ad_rows,
+                                  f"Diagnostics ({src} toxicity).", f"Adiag_{src}"),
             a_latex=_latex_table("method", a_cols, a_rows,
                                  f"Safety vs efficacy ({src} toxicity).", f"A_{src}"),
             b_latex=_latex_table("base + operator", b_cols, b_rows,
