@@ -42,19 +42,21 @@ COLORS = {
     "ehvi": "#9aa0a6", "ehvi_trunc": "#1b9e77", "random": "#b0b6bd",
     "farthest": "#8e6fb0", "cluster": "#e0a32e", "info_div": "#c2548a",
 }
+# labels: [acquisition] + [where truncation applied] + [toxicity source]
 LABELS = {
-    "greedy": "greedy (no safety)", "trunc_known": "truncation · known tox",
-    "trunc_pred": "truncation · predicted tox", "ehvi": "EHVI (no truncation)",
-    "ehvi_trunc": "EHVI + τ truncation", "random": "random",
-    "farthest": "farthest (coverage)", "cluster": "cluster (density)",
-    "info_div": "info-diverse (IterPert-like)",
+    "greedy": "greedy acq · no truncation",
+    "trunc_known": "greedy acq · nomination-trunc · known tox",
+    "trunc_pred": "greedy acq · nomination-trunc · pred tox",
+    "greedy_safe": "greedy acq · per-round trunc · pred tox",
+    "known_safe": "greedy acq · per-round trunc · known tox (upper bd)",
+    "ehvi": "EHVI acq · no truncation",
+    "ehvi_trunc": "EHVI acq · nomination-trunc · pred tox",
+    "ehvi_safe": "EHVI acq · per-round trunc · pred tox",
+    "random": "random", "farthest": "farthest (coverage)",
+    "cluster": "cluster (density)", "info_div": "info-diverse (IterPert-like)",
 }
 A_ORDER = ["greedy", "trunc_known", "trunc_pred", "greedy_safe", "ehvi", "ehvi_trunc",
            "ehvi_safe", "known_safe", "random", "farthest", "cluster", "info_div"]
-LABELS.update({
-    "greedy_safe": "greedy + per-round trunc", "ehvi_safe": "EHVI + per-round trunc",
-    "known_safe": "known trunc throughout (upper bd)",
-})
 COLORS.update({"greedy_safe": "#b23a55", "ehvi_safe": "#11806080", "known_safe": "#0b3d91"})
 # acquisitions (for the assayed-set panel + per-round curves)
 ACQ_ORDER = ["random", "greedy", "farthest", "cluster", "info_div", "ehvi",
@@ -587,6 +589,7 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 
 _GLOSSARY = """
 <b>Two analyses, two questions, two toxicity definitions.</b><br><br>
+<b>Reading method labels:</b> <code>[acquisition] · [where truncation is applied] · [toxicity source]</code>. <i>acquisition</i> = greedy (UCB on efficacy) or EHVI (dual-objective). <i>truncation</i> = none / nomination-trunc (filter only the final shortlist) / per-round trunc (filter the candidate pool every round). <i>toxicity source</i> = known (oracle) or pred (learned GP). E.g. "greedy acq · nomination-trunc · known tox" = greedy acquisition, post-hoc filter on the known toxicity.<br><br>
 <b>Safety rules (Analysis A).</b>
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>truncation · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>truncation · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>trunc_known is the limit the learned rules chase.</i><br><br>
 <b>Constrained acquisition ("+ per-round trunc").</b> The methods above truncate only at nomination. The <b>greedy + per-round trunc</b> / <b>EHVI + per-round trunc</b> / <b>known trunc throughout</b> variants additionally restrict <i>each acquisition round</i> to genes believed safe (predicted, or known for the upper bound) — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination are still distinct stages; this constrains both.<br><br>
