@@ -52,8 +52,10 @@ LABELS = {
     "random": "random", "farthest": "farthest", "cluster": "cluster",
     "info_div": "info-div",
 }
-A_ORDER = ["greedy", "trunc_known", "trunc_pred", "greedy_safe", "ehvi", "ehvi_trunc",
-           "ehvi_safe", "known_safe", "random", "farthest", "cluster", "info_div"]
+# grouped by regime so one table serves both discussions:
+# no-filter (no-threshold regime) first, then filtered (threshold regime).
+A_ORDER = ["greedy", "ehvi", "random", "farthest", "cluster", "info_div",
+           "trunc_known", "known_safe", "trunc_pred", "greedy_safe", "ehvi_trunc", "ehvi_safe"]
 COLORS.update({"greedy_safe": "#b23a55", "ehvi_safe": "#11806080", "known_safe": "#0b3d91"})
 # acquisitions (for the assayed-set panel + per-round curves)
 ACQ_ORDER = ["random", "greedy", "farthest", "cluster", "info_div", "ehvi",
@@ -66,7 +68,7 @@ OP_ORDER = ["none", "cap", "kdpp_emb", "kdpp_corum"]
 OP_LABELS = {"none": "none", "cap": "cap (CORUM)", "kdpp_emb": "k-DPP · embedding",
              "kdpp_corum": "k-DPP · CORUM"}
 OP_SHORT = {"none": "none", "cap": "cap", "kdpp_emb": "kdpp·emb", "kdpp_corum": "kdpp·CORUM"}
-B_BASE_SHORT = {"greedy": "greedy", "truncation": "trunc·K", "ehvi_trunc": "E·nom·P"}
+B_BASE_SHORT = {"greedy": "greedy", "truncation": "filter·K", "ehvi_trunc": "E·nom·P"}
 OP_MARK = {"none": "o", "cap": "s", "kdpp_emb": "D", "kdpp_corum": "^"}
 OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77", "kdpp_corum": "#e0a32e"}
 B_BASE_ORDER = ["greedy", "truncation", "ehvi_trunc"]
@@ -426,6 +428,30 @@ def _b_eff_conc(d, src, fig_dir):
     return _emit(fig, fig_dir, f"eff_vs_conc_{src}")
 
 
+def _filter_timing_curve(rounds, src, fig_dir):
+    """Per-round filtering vs end-stage filtering, permissible efficacy vs round,
+    for the greedy and EHVI pairs. The gap (per-round − nomination) should widen
+    with rounds, since per-round filtering avoids spending budget on toxic genes."""
+    if rounds is None or rounds.empty:
+        return None
+    d = rounds[rounds.tox_source == src]
+    pairs = [("trunc_pred", "greedy_safe", "greedy"), ("ehvi_trunc", "ehvi_safe", "EHVI")]
+    pairs = [(a, b, lab) for a, b, lab in pairs if a in set(d.method) and b in set(d.method)]
+    if not pairs:
+        return None
+    fig, axes = plt.subplots(1, len(pairs), figsize=(5.2 * len(pairs), 4.0), squeeze=False)
+    for ax, (nom, rt, lab) in zip(axes[0], pairs):
+        for m, sty, nm in [(nom, "--", "end-stage filter"), (rt, "-", "per-round filter")]:
+            agg = d[d.method == m].groupby("round")["nom_mean_efficacy_safe"].mean()
+            ax.plot(agg.index, agg.values, sty + "o", ms=4, lw=1.6,
+                    color=("#2e6f95" if "per-round" in nm else "#9aa0a6"), label=nm)
+        _despine(ax); ax.set_title(f"{lab} acquisition", fontsize=10)
+        ax.set_xlabel("AL round"); ax.set_ylabel("permissible efficacy ↑")
+        ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"filter_timing_{src}")
+
+
 def _failure_curve(dB, src, fig_dir):
     """Value-of-diversity: portfolio value retained as the d most-valuable
     pathways fail, one line per operator (on a representative base). Diversified
@@ -542,6 +568,11 @@ _FACET_TMPL = """
 <div class="card">{{ rounds_nom|safe }}</div>
 <div class="card">{{ rounds_assayed|safe }}</div>
 {% endif %}
+{% if filter_timing %}
+<h3>A &middot; Per-round vs end-stage filtering (does filter timing matter?)</h3>
+<div class="note">Permissible efficacy vs AL round for per-round filtering (solid) vs a single end-stage filter (dashed). The gap widens with rounds — per-round filtering increasingly pays off as more budget would otherwise be spent on genes that get discarded.</div>
+<div class="card">{{ filter_timing|safe }}</div>
+{% endif %}
 
 <h3>B &middot; Diversity / robustness</h3>
 <div class="key">{{ headline_b|safe }}</div>
@@ -595,10 +626,10 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 
 _GLOSSARY = """
 <b>Two analyses, two questions, two toxicity definitions.</b><br><br>
-<b>Reading method labels</b> (compact <code>[acq]·[truncation]·[tox]</code>): <b>G</b>=greedy acquisition (UCB on efficacy), <b>E</b>=EHVI (dual-objective); <b>nom</b>=truncation of the final shortlist only, <b>RT</b>=per-round truncation (filter the candidate pool every round); <b>K</b>=known toxicity (oracle), <b>P</b>=predicted toxicity (learned GP). So <code>G·nom·K</code> = greedy acquisition + post-hoc filter on known toxicity (= oracle ceiling); <code>E·RT·P</code> = EHVI + per-round filter on predicted toxicity. <code>random/farthest/cluster/info-div</code> are the no-safety baselines.<br><br>
+<b>Reading method labels</b> (compact <code>[acq]·[filtering]·[tox]</code>): <b>G</b>=greedy acquisition (UCB on efficacy), <b>E</b>=EHVI (dual-objective); <b>nom</b>=filter the final shortlist only, <b>RT</b>=per-round filtering (filter the candidate pool every round); <b>K</b>=known toxicity (oracle), <b>P</b>=predicted toxicity (learned GP). So <code>G·nom·K</code> = greedy acquisition + end-stage filter on known toxicity (= oracle ceiling); <code>E·RT·P</code> = EHVI + per-round filter on predicted toxicity. <code>random/farthest/cluster/info-div</code> are the no-safety baselines.<br><br>
 <b>Safety rules (Analysis A).</b>
-&bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>truncation · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>truncation · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>trunc_known is the limit the learned rules chase.</i><br><br>
-<b>Constrained acquisition ("+ per-round trunc").</b> The methods above truncate only at nomination. The <b>greedy + per-round trunc</b> / <b>EHVI + per-round trunc</b> / <b>known trunc throughout</b> variants additionally restrict <i>each acquisition round</i> to genes believed safe (predicted, or known for the upper bound) — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination are still distinct stages; this constrains both.<br><br>
+&bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>filter · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>filter · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>The known-toxicity filter is the limit the learned rules chase.</i><br><br>
+<b>Filter timing (end-stage vs per-round).</b> The filter can be applied only to the final shortlist (<i>end-stage</i>, <code>nom</code>) or at <i>every acquisition round</i> (<code>RT</code>), restricting each round to genes believed safe — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination remain distinct stages; per-round filtering constrains both.<br><br>
 <b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>cap</b>: ≤ c per CORUM complex (discrete hedge). &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · CORUM</b>: same, but with the <i>external</i> CORUM pathway-matrix (Jaccard co-membership) similarity. Neither is outcome similarity. CORUM is the single external knowledge source (membership → cap; pathway matrix → k-DPP). Layered on three bases (greedy / truncation / ehvi_trunc). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
 <b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).
 """
@@ -633,6 +664,7 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             a_cols=a_cols, a_rows=a_rows, headline_b=_headline_B(dB),
             assayed_img=assayed_img, asy_cols=asy_cols, asy_rows=asy_rows,
             rounds_nom=rounds_nom, rounds_assayed=rounds_assayed,
+            filter_timing=_filter_timing_curve(rounds, src, fig_dir),
             a_latex=_latex_table("method", a_cols, a_rows,
                                  f"Safety vs efficacy ({src} toxicity).", f"A_{src}"),
             b_latex=_latex_table("base + operator", b_cols, b_rows,
