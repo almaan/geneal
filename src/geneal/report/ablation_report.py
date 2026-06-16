@@ -49,8 +49,20 @@ LABELS = {
     "farthest": "farthest (coverage)", "cluster": "cluster (density)",
     "info_div": "info-diverse (IterPert-like)",
 }
-A_ORDER = ["greedy", "trunc_known", "trunc_pred", "ehvi", "ehvi_trunc", "random",
-           "farthest", "cluster", "info_div"]
+A_ORDER = ["greedy", "trunc_known", "trunc_pred", "greedy_safe", "ehvi", "ehvi_trunc",
+           "ehvi_safe", "known_safe", "random", "farthest", "cluster", "info_div"]
+LABELS.update({
+    "greedy_safe": "greedy + per-round trunc", "ehvi_safe": "EHVI + per-round trunc",
+    "known_safe": "known trunc throughout (upper bd)",
+})
+COLORS.update({"greedy_safe": "#b23a55", "ehvi_safe": "#11806080", "known_safe": "#0b3d91"})
+# acquisitions (for the assayed-set panel + per-round curves)
+ACQ_ORDER = ["random", "greedy", "farthest", "cluster", "info_div", "ehvi",
+             "greedy_safe", "ehvi_safe", "known_safe"]
+ACQ_LABELS = {"random": "random", "greedy": "greedy/UCB", "farthest": "farthest",
+              "cluster": "cluster", "info_div": "info-diverse", "ehvi": "EHVI",
+              "greedy_safe": "greedy+safe", "ehvi_safe": "EHVI+safe",
+              "known_safe": "known-safe (upper bd)"}
 OP_ORDER = ["none", "cap", "kdpp"]
 B_BASE_ORDER = ["greedy", "truncation", "ehvi_trunc"]
 B_BASE_COLOR = {"greedy": "#d1495b", "truncation": "#2e6f95", "ehvi_trunc": "#1b9e77"}
@@ -67,6 +79,32 @@ _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness�
 def _ci(x):
     x = np.asarray(x, float); n = len(x); m = float(x.mean()) if n else float("nan")
     return m, (0.0 if n < 2 else 1.96 * float(x.std(ddof=1)) / np.sqrt(n))
+
+
+_TEX = [("±", r"$\pm$"), ("↑", r"$\uparrow$"), ("↓", r"$\downarrow$"),
+        ("α", r"$\alpha$"), ("·", r"$\cdot$"), ("τ", r"$\tau$"),
+        ("&", r"\&"), ("%", r"\%"), ("_", r"\_"), ("#", r"\#")]
+
+
+def _tex(s):
+    s = str(s)
+    for a, b in _TEX:
+        s = s.replace(a, b)
+    return s
+
+
+def _latex_table(row_header, cols, rows, caption, label):
+    """booktabs LaTeX tabular with the same data as an HTML table."""
+    out = [r"\begin{table}[t]", r"\centering", r"\caption{" + caption + "}",
+           r"\label{tab:" + label + "}",
+           r"\begin{tabular}{l" + "r" * len(cols) + "}", r"\toprule",
+           _tex(row_header) + " & " + " & ".join(_tex(c) for c in cols) + r" \\",
+           r"\midrule"]
+    for r in rows:
+        name = r.get("m") or r.get("label") or ""
+        out.append(_tex(name) + " & " + " & ".join(_tex(c) for c in r["cells"]) + r" \\")
+    out += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
+    return "\n".join(out)
 
 
 def _despine(ax):
@@ -229,6 +267,95 @@ def _safety_bar(dA, src, fig_dir):
     return _emit(fig, fig_dir, f"safety_count_{src}")
 
 
+def _final_k_bars(dA, src, fig_dir):
+    """Per-method bars of the FINAL nominated K-set metrics (mean over lines x
+    seeds, 95% CI): permissible efficacy, mean toxicity, # safe, concentration."""
+    methods = [m for m in A_ORDER if m in set(dA.method)]
+    specs = [("mean_efficacy_safe", "permissible efficacy ↑"),
+             ("mean_toxicity", "mean toxicity ↓"),
+             ("n_safe", "# safe (of K) ↑"),
+             ("concentration", "concentration ↓")]
+    specs = [(c, l) for c, l in specs if c in dA.columns]
+    fig, axes = plt.subplots(1, len(specs), figsize=(4.0 * len(specs), 4.2))
+    if len(specs) == 1:
+        axes = [axes]
+    cols = [COLORS.get(m, "#888") for m in methods]
+    for ax, (col, lab) in zip(axes, specs):
+        means = [_ci(dA[dA.method == m][col])[0] for m in methods]
+        errs = [_ci(dA[dA.method == m][col])[1] for m in methods]
+        ax.bar(range(len(methods)), means, yerr=errs, color=cols, capsize=2,
+               error_kw=dict(lw=1, ecolor="#444"))
+        ax.set_xticks(range(len(methods)))
+        ax.set_xticklabels([LABELS.get(m, m) for m in methods], rotation=40, ha="right", fontsize=7)
+        ax.set_title(lab, fontsize=10); _despine(ax)
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"final_k_{src}")
+
+
+def _assayed_panel(assayed, src, fig_dir):
+    """Per-ACQUISITION quality of the assayed set (the ~120 genes actually
+    measured): #lethal-&-safe of the assayed, mean toxicity. Shows whether
+    constrained / EHVI acquisition collects safer data than greedy."""
+    if assayed is None or assayed.empty:
+        return None, ([], [])
+    d = assayed[assayed.tox_source == src]
+    accs = [a for a in ACQ_ORDER if a in set(d.acq)]
+    nsafe = [_ci(d[d.acq == a]["n_safe"])[0] for a in accs]
+    mtox = [_ci(d[d.acq == a]["mean_toxicity"])[0] for a in accs]
+    meff = [_ci(d[d.acq == a]["mean_efficacy"])[0] for a in accs]
+    nass = [_ci(d[d.acq == a]["n_assayed"])[0] for a in accs]
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.2))
+    a1.bar(range(len(accs)), nsafe, color="#1b9e77")
+    a1.set_xticks(range(len(accs))); a1.set_xticklabels([ACQ_LABELS.get(a, a) for a in accs],
+                                                        rotation=30, ha="right", fontsize=8)
+    a1.set_ylabel(f"# assayed that are safe (of ~{int(np.nanmean(nass)) if nass else 0})")
+    a1.set_title("safe genes collected", fontsize=10); _despine(a1)
+    a2.bar(range(len(accs)), mtox, color="#d1495b")
+    a2.set_xticks(range(len(accs))); a2.set_xticklabels([ACQ_LABELS.get(a, a) for a in accs],
+                                                        rotation=30, ha="right", fontsize=8)
+    a2.set_ylabel("mean toxicity of assayed set"); a2.set_title("toxicity of collected data", fontsize=10)
+    _despine(a2)
+    fig.tight_layout()
+    img = _emit(fig, fig_dir, f"assayed_{src}")
+    cols = ["mean efficacy", "mean toxicity", "# safe", "# assayed"]
+    rows = [{"m": ACQ_LABELS.get(a, a),
+             "cells": [f"{meff[i]:.3f}", f"{mtox[i]:.3f}", f"{nsafe[i]:.1f}", f"{nass[i]:.0f}"]}
+            for i, a in enumerate(accs)]
+    return img, (cols, rows)
+
+
+def _round_curves(rounds, src, fig_dir):
+    """Per-round learning curves. Two figures (nomination quality, assayed-set
+    quality), each 1x3 panels; one line per method, mean over lines x seeds."""
+    if rounds is None or rounds.empty:
+        return None, None
+    d = rounds[rounds.tox_source == src]
+    methods = [m for m in A_ORDER if m in set(d.method)]
+
+    def panel(specs, name):
+        fig, axes = plt.subplots(1, len(specs), figsize=(5.0 * len(specs), 4.0))
+        if len(specs) == 1:
+            axes = [axes]
+        for ax, (col, ylab) in zip(axes, specs):
+            for m in methods:
+                g = d[d.method == m]
+                agg = g.groupby("round")[col].mean()
+                ax.plot(agg.index, agg.values, "-o", ms=3, lw=1.4,
+                        color=COLORS.get(m, "#888"), label=LABELS.get(m, m))
+            _despine(ax); ax.set_xlabel("AL round"); ax.set_ylabel(ylab)
+        axes[0].legend(frameon=False, fontsize=6.5, ncol=2, loc="best")
+        fig.tight_layout()
+        return _emit(fig, fig_dir, name)
+
+    nom = panel([("nom_mean_efficacy_safe", "permissible efficacy ↑"),
+                 ("nom_n_safe", "# safe nominees ↑"),
+                 ("nom_mean_toxicity", "nominee toxicity ↓")], f"rounds_nom_{src}")
+    asy = panel([("assayed_mean_efficacy", "assayed efficacy"),
+                 ("assayed_mean_toxicity", "assayed toxicity ↓"),
+                 ("assayed_n_safe", "# safe assayed ↑")], f"rounds_assayed_{src}")
+    return nom, asy
+
+
 # ---- Section B ---------------------------------------------------------------
 def _b_table(d):
     cols = [lbl for _, lbl in _B_METRICS]
@@ -350,11 +477,31 @@ _FACET_TMPL = """
 {% endfor %}
 </details>
 {% endif %}
+{% if final_k %}
+<h3>A &middot; Final K-set performance (per method)</h3>
+<div class="note">The nominated top-{{ cloudK }} shortlist scored on its true values (mean over lines × seeds, 95% CI). Permissible efficacy = mean efficacy among picks below the τ ceiling.</div>
+<div class="card">{{ final_k|safe }}</div>
+{% endif %}
 <h3>A &middot; Method table</h3>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details></div>
+{% if assayed_img %}
+<h3>A &middot; Assayed set — quality of the genes actually measured</h3>
+<div class="note">Per <b>acquisition</b> (not nomination): of the ~120 genes measured during the loop, how many are safe and how toxic the collected data is. Tests whether EHVI / constrained ("+safe") acquisition gathers safer data than greedy.</div>
+<div class="card">{{ assayed_img|safe }}</div>
+<div class="card"><table>
+<thead><tr><th>acquisition</th>{% for h in asy_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in asy_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ asy_latex }}</code></pre></details></div>
+{% endif %}
+{% if rounds_nom %}
+<h3>A &middot; Per-round learning curves</h3>
+<div class="note">Performance vs AL round (mean over lines × seeds). Top — nomination quality (the final shortlist if we stopped at round r). Bottom — assayed-set quality (what's been measured so far).</div>
+<div class="card">{{ rounds_nom|safe }}</div>
+<div class="card">{{ rounds_assayed|safe }}</div>
+{% endif %}
 
 <h3>B &middot; Diversity / robustness</h3>
 <div class="key">{{ headline_b|safe }}</div>
@@ -362,7 +509,7 @@ _FACET_TMPL = """
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in b_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex }}</code></pre></details></div>
 <div class="card">{{ b_bar|safe }}</div>
 <h3>B &middot; Efficacy vs concentration</h3>
 <div class="note">Each line a base; markers are operators none→cap→kdpp. Left = better hedged; high = efficacy retained.</div>
@@ -384,6 +531,10 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  .note{color:#6b7280;font-size:.9rem;margin:.2rem 0 .6rem}
  .key{background:#eef5fa;border-left:3px solid #2e6f95;padding:.6rem 1rem;border-radius:7px;margin:.5rem 0;font-size:.95rem}
  .gloss{background:#fff;border:1px solid #e8ebef;border-radius:11px;padding:.9rem 1.2rem;font-size:.92rem}
+ details.tex{margin-top:.6rem}
+ details.tex summary{cursor:pointer;color:#2e6f95;font-weight:600;font-size:.85rem}
+ details.tex pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:.8rem 1rem;overflow-x:auto;font-size:.8rem;margin-top:.4rem}
+ details.tex code{font-family:ui-monospace,'SF Mono',Menlo,monospace}
 </style></head><body>
 <h1>{{ title }}</h1>
 <div class="sub">{{ meta.n_genes }} genes ({{ panel_label }}) &middot; {{ n_lines }} cell lines &middot; {{ n_seeds }} seeds &middot; K={{ meta.K }} &middot; AL {{ meta.n_rounds }}×{{ meta.batch }} &middot; τ-quantile={{ meta.tau }} &middot; contrast line {{ meta.contrast_line }} &middot; acq={{ meta.acq_score }}{% if meta.joint_gp %} &middot; JOINT GP{% endif %}</div>
@@ -401,13 +552,14 @@ _GLOSSARY = """
 <b>Two analyses, two questions, two toxicity definitions.</b><br><br>
 <b>Safety rules (Analysis A).</b>
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>truncation · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>truncation · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>trunc_known is the limit the learned rules chase.</i><br><br>
+<b>Constrained acquisition ("+ per-round trunc").</b> The methods above truncate only at nomination. The <b>greedy + per-round trunc</b> / <b>EHVI + per-round trunc</b> / <b>known trunc throughout</b> variants additionally restrict <i>each acquisition round</i> to genes believed safe (predicted, or known for the upper bound) — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination are still distinct stages; this constrains both.<br><br>
 <b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>cap</b>: ≤ c per CORUM pathway. &bull; <b>kdpp</b>: quality-weighted k-DPP with a dense embedding-cosine (mechanism) similarity — <i>never outcome similarity</i>. Layered on three bases.<br><br>
 <b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).
 """
 
 
 def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
-                          fig_dir=None,
+                          assayed=None, rounds=None, fig_dir=None,
                           title="geneal — default ablation (safety + diversity)") -> Path:
     meta = meta or {}
     lines = meta.get("lines") or sorted(df.cell_line.unique())
@@ -422,14 +574,26 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
         d = df[df.tox_source == src]
         dA, dB = d[d.analysis == "A"], d[d.analysis == "B"]
         a_cols, a_rows = _table_A(dA); b_cols, b_rows = _b_table(dB)
+        assayed_img, (asy_cols, asy_rows) = _assayed_panel(assayed, src, fig_dir)
+        rounds_nom, rounds_assayed = _round_curves(rounds, src, fig_dir)
         block = Environment(loader=BaseLoader()).from_string(_FACET_TMPL).render(
             src=src, primary=" (primary)" if src == "contrast" else "", tau=tau,
             tradeoff=_tradeoff_points(dA, src, scatter, tau, tau_mode, fig_dir),
             safety_bar=_safety_bar(dA, src, fig_dir),
+            final_k=_final_k_bars(dA, src, fig_dir),
             perline=_tradeoff_per_line(dA, src, lines, scatter, tau, tau_mode, fig_dir),
             cloud=_gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir),
             cloudK=meta.get("K", ""), n_lines=df.cell_line.nunique(),
             a_cols=a_cols, a_rows=a_rows, headline_b=_headline_B(dB),
+            assayed_img=assayed_img, asy_cols=asy_cols, asy_rows=asy_rows,
+            rounds_nom=rounds_nom, rounds_assayed=rounds_assayed,
+            a_latex=_latex_table("method", a_cols, a_rows,
+                                 f"Safety vs efficacy ({src} toxicity).", f"A_{src}"),
+            b_latex=_latex_table("base + operator", b_cols, b_rows,
+                                 f"Diversity / robustness ({src} toxicity).", f"B_{src}"),
+            asy_latex=_latex_table("acquisition", asy_cols, asy_rows,
+                                   f"Assayed-set quality ({src} toxicity).", f"assayed_{src}")
+                       if asy_rows else "",
             kdpp_sim=kdpp_sim, b_cols=b_cols, b_rows=b_rows,
             b_bar=_b_bar(dB, src, fig_dir), b_eff_conc=_b_eff_conc(dB, src, fig_dir))
         facets.append({"block": block, "headline_a": _headline_A(dA)})
@@ -449,9 +613,12 @@ if __name__ == "__main__":
     import sys, json
     df = pd.read_parquet(sys.argv[1])
     base = Path(sys.argv[1]).parent
-    sc = pd.read_parquet(base / "scatter.parquet") if (base / "scatter.parquet").exists() else None
+    def _opt(name):
+        return pd.read_parquet(base / name) if (base / name).exists() else None
+    sc = _opt("scatter.parquet"); asy = _opt("assayed.parquet"); rnd = _opt("rounds.parquet")
     mp = base / "meta.json"
     meta = json.loads(mp.read_text()) if mp.exists() else {}
+    fd = (base / "figs") if (len(sys.argv) > 3 and sys.argv[3] == "--figs") else None
     p = build_ablation_report(df, sys.argv[2] if len(sys.argv) > 2 else "ablation_report.html",
-                              scatter=sc, meta=meta, fig_dir=base / "figs")
+                              scatter=sc, meta=meta, assayed=asy, rounds=rnd, fig_dir=fd)
     print(f"report -> {p}")

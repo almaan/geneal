@@ -209,26 +209,38 @@ the \emph{expected amount by which this gene would beat the current best}, accou
 uncertainty: it is large either when the mean clearly beats $y^+$, or when the gene is
 uncertain enough to plausibly beat it. Higher $=$ more worth measuring.
 
-\paragraph{Baseline acquisitions we compare against.} To show the model-driven scores above
-are actually buying us something, we race them against representative prior-work acquisitions
-(generic names, not exact reimplementations of any one paper):
-\begin{itemize}[leftmargin=2em,itemsep=1pt]
-\item \textbf{random}: a uniformly random batch each round. The floor any useful method must beat.
-\item \textbf{farthest} (greedy $k$-center / coverage): repeatedly pick the gene whose
-fingerprint is \emph{farthest} from everything measured so far. Pure geometric spread,
-quality-blind.
-\item \textbf{cluster} (density): cluster the candidates in fingerprint space and pick the
-most ``typical'' (densest-neighbourhood) gene from each cluster. Also diversity-only.
-\item \textbf{info\_div} (informative-diverse): a quality-weighted $k$-DPP \emph{at
-acquisition time} --- quality $=$ UCB, similarity $=$ embedding cosine --- so the batch is
-both informative \emph{and} spread. This is the faithful stand-in for methods that combine
-model informativeness with diversity in a learned representation (e.g.\ IterPert); the
-\texttt{greedy} rule above is the stand-in for the quality/effect-only family (e.g.\ NAIAD).
+\paragraph{The acquisitions / baselines, and how each is implemented.} Every method's
+active-learning loop uses one of the acquisitions below to choose each round's batch of $q$
+genes. The names are generic (representative stand-ins, not exact reimplementations of any
+one paper). Let $D$ be the genes measured so far and $C$ the unmeasured candidates.
+\begin{itemize}[leftmargin=2em,itemsep=2pt]
+\item \textbf{random} --- draw $q$ genes uniformly at random from $C$ (no replacement), via a
+seeded RNG. The floor any useful method must beat.
+\item \textbf{greedy} (quality-only; stand-in for the effect-driven family, e.g.\ NAIAD) ---
+fit the efficacy GP on $D$, score every candidate by UCB $\mu+2\sigma$ (or EI), take the top
+$q$. Pure exploitation of predicted lethality; ignores diversity and toxicity.
+\item \textbf{farthest} (coverage / greedy $k$-center) --- ignore the GP entirely; starting
+from $D$, repeatedly add the candidate whose embedding is \emph{farthest} (max-min Euclidean
+distance) from all already-chosen points. Quality-blind geometric spread.
+\item \textbf{cluster} (density / typicality) --- $k$-means the candidates in embedding space
+into $q$ clusters; from each cluster take the most ``typical'' gene (smallest mean distance
+to its $K$ nearest neighbours). Quality-blind, one pick per cluster.
+\item \textbf{info\_div} (informative-diverse; stand-in for informativeness$+$diversity AL,
+e.g.\ IterPert) --- a quality-weighted $k$-DPP \emph{at acquisition time}: build
+$L=\operatorname{diag}(q)\,S\,\operatorname{diag}(q)$ with quality $q_i=$ UCB and
+$S=$ embedding cosine, then greedily pick the batch that maximizes $\log\det L_B$ (Step 3).
+Informative \emph{and} spread.
+\item \textbf{ehvi} (dual-objective) --- the multi-objective acquisition of Step 6: fit
+efficacy and toxicity GPs (or one joint GP), pick the batch by greedy Expected Hypervolume
+Improvement. Explores both axes; the only acquisition that actively gathers toxicity
+information.
 \end{itemize}
-Including these tests whether \emph{quality-aware} acquisition (UCB / EHVI / info\_div) beats
-\emph{quality-blind} diversity, and whether any acquisition-time diversity helps the
-\emph{safety} axis (it does not --- diversity of what you \emph{measure} is not safety of what
-you \emph{nominate}).
+\textbf{Constrained ("$+$safe") variants.} \texttt{greedy} and \texttt{ehvi} also have
+\emph{safety-constrained} forms that apply the truncation \emph{each round}: before scoring,
+restrict $C$ to genes believed safe (predicted toxicity $\le\tau$, or \emph{known} toxicity
+for the upper-bound variant), so the assay budget is never spent on genes we think are toxic
+(\S\ref{sec:together}). Comparing these to the post-truncation-only methods isolates the
+value of truncating during collection vs.\ only at the end.
 
 \section{Step 3: choosing a non-redundant batch}
 
@@ -478,14 +490,30 @@ spanning many mechanisms.
 We report each metric as a mean $\pm$ 95\% confidence interval over cell lines and seeds, so
 differences between methods can be read as real or within noise.
 
-\section{Putting it together}
+\paragraph{Two populations: the nominated $K$ and the assayed $\sim$120.} The metrics above
+score the final shortlist $B$ ($K{=}30$). But the genes \emph{actually measured} during the
+loop ($n_{\text{init}}+R\,q\approx 120$) are themselves a deliverable --- a real screen cares
+what it found, not only what the model extrapolates. So we \emph{also} report the same
+efficacy/toxicity/\#-permissible statistics on the assayed set, \emph{per acquisition} (it
+depends only on what was measured, not on the nomination rule). This is where a dual-objective
+or safety-constrained acquisition should pay off: it ought to collect more lethal-and-safe
+genes than quality-only greedy.
+
+\paragraph{Per-round learning curves.} For both populations we track the metrics
+\emph{versus active-learning round} (re-nominating, and re-summarizing the assayed set, after
+each round). The nomination curve shows how fast a method reaches a good shortlist; the
+assayed curve shows how the quality of collected data grows --- and whether safety-constrained
+acquisition steers the budget into the safe region earlier.
+
+\section{Putting it together}\label{sec:together}
 
 \paragraph{Two distinct stages.} It is worth separating the two things a method does, which
 the steps above sometimes blur:
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
 \item \textbf{Acquisition} (the loop): given what is measured, choose the next batch to
-measure --- UCB-greedy, EHVI, or a baseline (random / CoreSet / TypiClust). This runs for
-several rounds and produces the final \emph{measured set} $D$.
+measure --- UCB-greedy, EHVI, a baseline (random / farthest / cluster / info\_div), or a
+\emph{safety-constrained} variant that only considers believed-safe candidates each round.
+This runs for several rounds and produces the final \emph{measured set} $D$.
 \item \textbf{Nomination} (once, at the end): from a final GP fit on $D$, choose the
 shortlist $B$ --- apply the \emph{safety rule} (none / known-toxicity ceiling / learned
 ceiling) and then the \emph{diversity operator} (none / per-pathway cap / $k$-DPP).
@@ -508,11 +536,13 @@ ceiling) and then the \emph{diversity operator} (none / per-pathway cap / $k$-DP
 \paragraph{The two analyses we run (the ablation).} Because safety and diversity are
 separate questions, we test them in two separate ablations rather than one tangled grid.
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
-\item \textbf{A --- safety vs.\ efficacy.} Vary only the \emph{safety rule}: none (naive
-greedy top-$K$) $\to$ truncation (known-toxicity ceiling, Step 5) $\to$ EHVI (a
-dual-objective acquisition that \emph{learns} toxicity, Step 6, with a learned ceiling at
-nomination). Race these against the random / CoreSet / TypiClust baselines, and plot all of
-them on the efficacy--toxicity plane. Question: does a safety rule buy a better
+\item \textbf{A --- safety vs.\ efficacy.} Vary the \emph{safety rule}: none (naive greedy
+top-$K$) $\to$ truncation on \emph{known} toxicity (oracle ceiling, Step 5) $\to$ truncation
+on \emph{predicted} toxicity $\to$ EHVI (dual-objective acquisition, Step 6, $\pm$ truncation).
+Each truncation rule also has a \emph{constrained-acquisition} form that applies it every
+round, plus a \emph{known}-throughout upper bound. Race all of these against the
+random / farthest / cluster / info\_div baselines, and plot them on the efficacy--toxicity
+plane. Question: does a safety rule buy a better
 potency--safety trade-off than naive or diversity-first prior work? \textbf{The
 truncation-vs-EHVI gap is itself a measurement:} truncation uses the \emph{known}
 common-essential annotation, EHVI must \emph{learn} toxicity from the embedding, so the
@@ -520,9 +550,9 @@ distance between them on the plane is the price of the weak embedding smoothness
 safety axis --- if the embedding predicted toxicity well, learned would meet known; if not,
 learned lands at higher true toxicity. (Empirically it does: learned safety is
 Pareto-dominated by the known-toxicity ceiling.)
-\item \textbf{B --- diversity / robustness.} Take a fixed base nomination (we use two: naive
-greedy, and the safety rule that won analysis A) and \emph{layer} the diversity operator on
-top: none $\to$ per-pathway cap $\to$ $k$-DPP. Question: does the operator de-concentrate
+\item \textbf{B --- diversity / robustness.} Take a fixed base nomination (we use three:
+naive greedy, known-toxicity truncation, and truncated-EHVI) and \emph{layer} the diversity
+operator on top: none $\to$ per-pathway cap $\to$ $k$-DPP. Question: does the operator de-concentrate
 the portfolio (lower $C$, higher $R$, more distinct pathways) without sacrificing efficacy?
 The cap is a ``bolt-on-any-method'' hedge --- it needs only the graph, so it composes with
 any base.

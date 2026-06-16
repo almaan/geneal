@@ -38,23 +38,43 @@ from geneal.data.selective import (build_selective_dataset, corum_membership,
 from geneal.runner.ablation import (run_acquisition, nominate, evaluate,
                                     build_string_S, build_embedding_S, _tox_threshold)
 
-# Analysis A: (label, acquisition, safety-filter). diversity = none.
+# Acquisition specs: acq_key -> (kind, acq_safety). acq_safety constrains the
+# per-round candidate pool to believed-safe genes (none/known/pred).
+ACQ_SPECS = {
+    "random":       ("random",   "none"),
+    "greedy":       ("greedy",   "none"),
+    "farthest":     ("farthest", "none"),
+    "cluster":      ("cluster",  "none"),
+    "info_div":     ("info_div", "none"),
+    "ehvi":         ("ehvi",     "none"),
+    "greedy_safe":  ("greedy",   "pred"),   # truncate-each-round (predicted tox)
+    "ehvi_safe":    ("ehvi",     "pred"),   # EHVI, truncate-each-round (predicted)
+    "known_safe":   ("greedy",   "known"),  # truncate-each-round (KNOWN tox) = upper bound
+}
+# acquisitions that do NOT depend on the toxicity definition (run once per line,seed)
+_TOX_INDEP_ACQ = ["random", "greedy", "farthest", "cluster", "info_div"]
+_TOX_DEP_ACQ = ["ehvi", "greedy_safe", "ehvi_safe", "known_safe"]
+
+# Analysis A method: (label, acq_key, nominate_safety). diversity = none.
 ANALYSIS_A = [
-    ("greedy",       "greedy",   "none"),   # naive top-K efficacy
-    ("trunc_known",  "greedy",   "known"),  # known-toxicity ceiling (oracle limit)
-    ("trunc_pred",   "greedy",   "pred"),   # learned-toxicity ceiling, greedy acq
-    ("ehvi",         "ehvi",     "none"),   # BASELINE: EHVI acq, learned tox, NO truncation
-    ("ehvi_trunc",   "ehvi",     "pred"),   # EHVI acq + tau truncation (learned tox)
-    ("random",       "random",   "none"),   # naive baseline
-    ("farthest",     "farthest", "none"),   # coverage diversity baseline
-    ("cluster",      "cluster",  "none"),   # cluster-representative baseline
-    ("info_div",     "info_div", "none"),   # informative-diverse (IterPert-family)
+    ("greedy",       "greedy",      "none"),   # naive top-K efficacy
+    ("trunc_known",  "greedy",      "known"),  # known ceiling at NOMINATION (oracle limit)
+    ("trunc_pred",   "greedy",      "pred"),   # learned ceiling at nomination
+    ("greedy_safe",  "greedy_safe", "pred"),   # + truncate-each-round (predicted)
+    ("ehvi",         "ehvi",        "none"),   # BASELINE: EHVI acq, NO truncation
+    ("ehvi_trunc",   "ehvi",        "pred"),   # EHVI acq + nomination truncation
+    ("ehvi_safe",    "ehvi_safe",   "pred"),   # EHVI + truncate-each-round (predicted)
+    ("known_safe",   "known_safe",  "known"),  # KNOWN truncation throughout (upper bound)
+    ("random",       "random",      "none"),
+    ("farthest",     "farthest",    "none"),
+    ("cluster",      "cluster",     "none"),
+    ("info_div",     "info_div",    "none"),
 ]
-# Analysis B bases: (label, acquisition, safety-filter); each x {none,cap,kdpp}.
+# Analysis B bases: (label, acq_key, nominate_safety); each x {none,cap,kdpp}.
 B_BASES = [
-    ("greedy",      "greedy", "none"),
-    ("truncation",  "greedy", "known"),
-    ("ehvi_trunc",  "ehvi",   "pred"),
+    ("greedy",      "greedy",    "none"),
+    ("truncation",  "greedy",    "known"),
+    ("ehvi_trunc",  "ehvi",      "pred"),
 ]
 DIVERSITY_OPS = ["none", "cap", "kdpp"]
 TOX_SOURCES = ["contrast", "aggregate"]
@@ -164,7 +184,19 @@ def main():
     nom_common = dict(K=args.K, tau=args.tau, surr_factory=factory, cap=args.cap,
                       pool=args.pool, joint_factory=joint_factory, tau_mode=args.tau_mode)
 
-    rows, scatters = [], []
+    def quick(idx, eff, tox, ceiling):
+        """Cheap true-value summary of a gene set (no alpha-NDCG/kmeans) for the
+        per-round curves."""
+        idx = list(idx)
+        if not idx:
+            return dict(mean_efficacy=float("nan"), mean_toxicity=float("nan"),
+                        n_safe=0, mean_efficacy_safe=float("nan"))
+        e = eff[idx]; t = tox[idx]; safe = t <= ceiling
+        return dict(mean_efficacy=float(e.mean()), mean_toxicity=float(t.mean()),
+                    n_safe=int(safe.sum()),
+                    mean_efficacy_safe=float(e[safe].mean()) if safe.any() else float("nan"))
+
+    rows, scatters, assayed_rows, round_rows = [], [], [], []
     for cl in lines:
         ds, aux = build_selective_dataset(ge, emb, cl, lam=0.0, thresh=args.thresh)
         X = StandardScaler().fit_transform(ds.embeddings)
@@ -179,41 +211,65 @@ def main():
         print(f"[{cl}] {len(eff)} genes, {sum(bool(v) for v in mem.values())} CORUM-annotated")
 
         for seed in args.seeds:
-            # tox-independent acquisitions: run once per (line, seed)
-            rev_indep = {k: run_acquisition(k, X, eff, None, seed=seed,
-                                            score=args.acq_score, **common)
-                         for k in _TOX_INDEP_ACQ}
+            # tox-independent acquisitions (acq_safety=none): run once per (line, seed),
+            # keep the per-round history.
+            hist_indep = {k: run_acquisition(k, X, eff, None, seed=seed,
+                                             score=args.acq_score, return_history=True,
+                                             **common)[1]
+                          for k in _TOX_INDEP_ACQ}
             for src in TOX_SOURCES:
                 tox = tox_by_source[src]
-                # biological ceiling on TRUE toxicity (for the safe/toxic counts +
-                # mean-efficacy-of-permissible-picks); same rule as the nominate filter.
                 ceiling = _tox_threshold(tox, args.tau, args.tau_mode)
-                rev = dict(rev_indep)
-                rev["ehvi"] = run_acquisition("ehvi", X, eff, tox, seed=seed,
+                # tox-dependent acquisitions (ehvi + constrained), per source, with history
+                hist = dict(hist_indep)
+                for k in _TOX_DEP_ACQ:
+                    kind, acqsaf = ACQ_SPECS[k]
+                    hist[k] = run_acquisition(kind, X, eff, tox, seed=seed,
                                               ehvi_samples=args.ehvi_samples,
-                                              shortlist=args.shortlist,
-                                              joint_factory=joint_factory, **common)
+                                              shortlist=args.shortlist, score=args.acq_score,
+                                              joint_factory=joint_factory, acq_safety=acqsaf,
+                                              tau=args.tau, tau_mode=args.tau_mode,
+                                              return_history=True, **common)[1]
+                # assayed-set stats: final revealed (the ~120 measured) per acquisition
+                for k, h in hist.items():
+                    m = evaluate(h[-1], eff, tox, mem, X, tox_ceiling=ceiling)
+                    assayed_rows.append(dict(tox_source=src, acq=k, cell_line=cl,
+                                             seed=seed, n_assayed=len(h[-1]), **m))
                 want_scatter = (seed == args.seeds[0])
                 picks = {}
-                # Analysis A
-                for label, acq, safety in ANALYSIS_A:
-                    sel = nominate(rev[acq], X, eff, tox, mem, safety=safety,
+                # Analysis A (final) + per-round curves
+                for label, acq_key, safety in ANALYSIS_A:
+                    h = hist[acq_key]
+                    for r, rev_r in enumerate(h):
+                        a = quick(rev_r, eff, tox, ceiling)                       # assayed-so-far
+                        seln = nominate(rev_r, X, eff, tox, mem, safety=safety,
+                                        diversity="none", S=S, **nom_common)
+                        nq = quick(seln, eff, tox, ceiling)                       # nomination
+                        round_rows.append(dict(
+                            tox_source=src, method=label, cell_line=cl, seed=seed, round=r,
+                            n_assayed=len(rev_r),
+                            assayed_mean_efficacy=a["mean_efficacy"],
+                            assayed_mean_toxicity=a["mean_toxicity"], assayed_n_safe=a["n_safe"],
+                            nom_mean_efficacy=nq["mean_efficacy"],
+                            nom_mean_efficacy_safe=nq["mean_efficacy_safe"],
+                            nom_mean_toxicity=nq["mean_toxicity"], nom_n_safe=nq["n_safe"]))
+                    sel = nominate(h[-1], X, eff, tox, mem, safety=safety,
                                    diversity="none", S=S, **nom_common)
                     m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
                     rows.append(dict(analysis="A", tox_source=src, method=label,
-                                     base=label, operator="none", acq=acq,
+                                     base=label, operator="none", acq=acq_key,
                                      safety=safety, cell_line=cl, seed=seed, **m))
                     if want_scatter:
                         picks[label] = set(sel)
-                # Analysis B
-                for base_label, acq, safety in B_BASES:
+                # Analysis B (final only)
+                for base_label, acq_key, safety in B_BASES:
                     for op in DIVERSITY_OPS:
-                        sel = nominate(rev[acq], X, eff, tox, mem, safety=safety,
+                        sel = nominate(hist[acq_key][-1], X, eff, tox, mem, safety=safety,
                                        diversity=op, S=S, **nom_common)
                         m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
                         rows.append(dict(analysis="B", tox_source=src,
                                          method=f"{base_label}+{op}", base=base_label,
-                                         operator=op, acq=acq, safety=safety,
+                                         operator=op, acq=acq_key, safety=safety,
                                          cell_line=cl, seed=seed, **m))
                 if want_scatter:
                     sc = pd.DataFrame({"efficacy": eff, "toxicity": tox})
@@ -232,6 +288,8 @@ def main():
     scatter_df = pd.concat(scatters, ignore_index=True) if scatters else None
     if scatter_df is not None:
         scatter_df.to_parquet(out / "scatter.parquet")
+    assayed_df = pd.DataFrame(assayed_rows); assayed_df.to_parquet(out / "assayed.parquet")
+    rounds_df = pd.DataFrame(round_rows); rounds_df.to_parquet(out / "rounds.parquet")
     meta = dict(panel=panel, n_genes=int(len(eff)), lines=lines, seeds=list(args.seeds),
                 K=args.K, tau=args.tau, cap=args.cap, n_rounds=args.n_rounds,
                 batch=args.batch, kdpp_sim=args.kdpp_sim, acq_score=args.acq_score,
@@ -259,6 +317,7 @@ def main():
     try:
         from geneal.report.ablation_report import build_ablation_report
         build_ablation_report(df, out / "report.html", scatter=scatter_df, meta=meta,
+                              assayed=assayed_df, rounds=rounds_df,
                               fig_dir=(out / "figs") if args.export_figs else None)
         print(f"\nreport -> {out / 'report.html'}")
     except Exception as e:

@@ -112,12 +112,39 @@ def acquire(kind, X, eff, revealed, cand, batch, rng, surr_factory, score="ucb")
     raise ValueError(f"unknown acquisition {kind!r}")
 
 
+def _safe_candidates(cand, X, eff, tox, revealed, acq_safety, tau, tau_mode,
+                     surr_factory, joint_factory, batch):
+    """Restrict candidates to those BELIEVED safe this round (constrained
+    acquisition). 'known' -> true toxicity <= ceiling; 'pred' -> predicted
+    toxicity <= ceiling (one joint multitask GP when joint_factory is given, else
+    a separate toxicity GP). Falls back to the full pool if the safe set is
+    smaller than the batch (don't stall the loop)."""
+    if acq_safety == "none":
+        return cand
+    cand = list(cand)
+    if acq_safety == "known":
+        m_tox = tox[cand]
+    else:  # 'pred'
+        if joint_factory is not None:
+            jg = joint_factory().fit(X[revealed], np.column_stack([eff[revealed], tox[revealed]]))
+            m_tox = np.asarray(jg.predict(X[cand])[0])[:, 1]
+        else:
+            m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X[cand])[0])
+    thr = _tox_threshold(m_tox, tau, tau_mode)
+    safe = [c for c, mt in zip(cand, m_tox) if mt <= thr]
+    return safe if len(safe) >= batch else cand
+
+
 def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
                     surr_factory=None, ehvi_samples=32, shortlist=150,
-                    noise=None, score="ucb", joint_factory=None):
+                    noise=None, score="ucb", joint_factory=None,
+                    acq_safety="none", tau=0.5, tau_mode="absolute",
+                    return_history=False):
     """Full active-learning loop for one acquisition. Returns the final revealed
-    global indices. Common random numbers: every kind seeds its initial set from
-    default_rng(seed).permutation, so kinds are paired per (line, seed)."""
+    global indices (or, with return_history=True, (final, [revealed-after-round-r
+    for r in 0..R]) where round 0 is the initial set). `acq_safety` constrains the
+    per-round candidate pool to believed-safe genes (none/known/pred). Common
+    random numbers: every kind seeds its initial set from default_rng(seed)."""
     surr_factory = surr_factory or _default_factory
     X = np.asarray(X, float)
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
@@ -125,20 +152,27 @@ def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
     if kind == "ehvi":
         runner = BivariateALRunner(surr_factory, noise or _ZeroNoise(),
                                    ehvi_samples=ehvi_samples, shortlist=shortlist,
-                                   joint_factory=joint_factory)
+                                   joint_factory=joint_factory,
+                                   acq_safety=acq_safety, tau=tau, tau_mode=tau_mode)
         hist = runner.run(X, eff, tox, n_init, n_rounds, batch, seed)
-        return [int(i) for i in hist[-1]["revealed"]]
+        history = [[int(i) for i in h["revealed"]] for h in hist]
+        final = history[-1]
+        return (final, history) if return_history else final
     rng = np.random.default_rng(seed)
     acq_rng = np.random.default_rng((seed, 99))
     revealed = [int(i) for i in rng.permutation(n)[:n_init]]
+    history = [list(revealed)]
     for _ in range(n_rounds):
         rset = set(revealed)
         cand = [i for i in range(n) if i not in rset]
         if not cand:
-            break
+            history.append(list(revealed)); continue
+        cand = _safe_candidates(cand, X, eff, tox, revealed, acq_safety, tau,
+                                tau_mode, surr_factory, joint_factory, batch)
         revealed += acquire(kind, X, eff, revealed, cand, batch, acq_rng,
                             surr_factory, score=score)
-    return revealed
+        history.append(list(revealed))
+    return (revealed, history) if return_history else revealed
 
 
 # --------------------------------------------------------------------------- #

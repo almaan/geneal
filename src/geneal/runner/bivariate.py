@@ -11,12 +11,16 @@ class BivariateALRunner:
     minimized, so we maximize (efficacy, −toxicity) in objective space."""
 
     def __init__(self, surrogate_factory, noise, ehvi_samples: int = 64,
-                 shortlist: int = 200, joint_factory=None):
+                 shortlist: int = 200, joint_factory=None,
+                 acq_safety="none", tau=0.5, tau_mode="absolute"):
         self.make = surrogate_factory
         self.noise = noise
         self.ehvi_samples = ehvi_samples
         self.shortlist = shortlist   # run EHVI only on the top-N most promising candidates
         self.joint_factory = joint_factory  # if set: one multitask GP + correlated EHVI
+        self.acq_safety = acq_safety  # constrained acquisition: none/known/pred
+        self.tau = tau
+        self.tau_mode = tau_mode
 
     def run(self, X, efficacy, toxicity, n_initial, n_rounds, batch_size, seed,
             tox_known=False, eff_known=False):
@@ -70,6 +74,15 @@ class BivariateALRunner:
                 else:
                     yt = np.array([tox[i] + noise_t[i] for i in revealed])
                     mt, sdt = self.make().fit(X[revealed], yt).predict(X[cand])
+            # constrained acquisition: restrict to believed-safe candidates this round
+            if self.acq_safety != "none":
+                from geneal.runner.ablation import _tox_threshold
+                tox_sig = tox[cand] if self.acq_safety == "known" else np.asarray(mt)
+                thr = _tox_threshold(tox_sig, self.tau, self.tau_mode)
+                keep = np.where(np.asarray(tox_sig) <= thr)[0]
+                if len(keep) >= batch_size:
+                    cand = [cand[i] for i in keep]
+                    me, sde, mt, sdt = me[keep], sde[keep], mt[keep], sdt[keep]
             mean = np.column_stack([me, -mt])     # maximize eff, -tox
             std = np.column_stack([sde, sdt])
             # shortlist: run the (slow) MC-EHVI only on the most promising
