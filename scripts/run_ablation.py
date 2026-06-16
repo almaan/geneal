@@ -270,23 +270,27 @@ def main():
                     sel = nominate(h[-1], X, eff, tox, mem, safety=safety,
                                    diversity="none", S=None, **nom_common)
                     m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
+                    n_novel = len(set(sel) - set(h[-1]))   # nominees NOT already assayed
                     rows.append(dict(analysis="A", tox_source=src, method=label,
                                      base=label, operator="none", acq=acq_key,
-                                     safety=safety, cell_line=cl, seed=seed, **m))
+                                     safety=safety, cell_line=cl, seed=seed,
+                                     n_novel=n_novel, **m))
                     if want_scatter:
                         picks[label] = set(sel)
                 # Analysis B (final only): 3 bases x {none, cap, kdpp_emb, kdpp_corum}
                 for base_label, acq_key, safety in B_BASES:
                     for op_label, mode, simsrc in DIVERSITY_OPS:
                         Sb = S_by_src.get(simsrc) if simsrc else None
-                        sel = nominate(hist[acq_key][-1], X, eff, tox, mem, safety=safety,
+                        rev_final = hist[acq_key][-1]
+                        sel = nominate(rev_final, X, eff, tox, mem, safety=safety,
                                        diversity=mode, S=Sb, **nom_common)
                         m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
                         dc = dropout_curve(sel, mem, eff, MAX_DROP)   # value-of-diversity
+                        n_novel = len(set(sel) - set(rev_final))
                         rows.append(dict(analysis="B", tox_source=src,
                                          method=f"{base_label}+{op_label}", base=base_label,
                                          operator=op_label, acq=acq_key, safety=safety,
-                                         cell_line=cl, seed=seed, **m,
+                                         cell_line=cl, seed=seed, n_novel=n_novel, **m,
                                          **{f"drop_{i}": dc[i] for i in range(len(dc))}))
                 if want_scatter:
                     sc = pd.DataFrame({"efficacy": eff, "toxicity": tox})

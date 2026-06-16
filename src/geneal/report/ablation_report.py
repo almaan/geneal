@@ -42,18 +42,15 @@ COLORS = {
     "ehvi": "#9aa0a6", "ehvi_trunc": "#1b9e77", "random": "#b0b6bd",
     "farthest": "#8e6fb0", "cluster": "#e0a32e", "info_div": "#c2548a",
 }
-# labels: [acquisition] + [where truncation applied] + [toxicity source]
+# Compact labels (used in figures AND tables; the grammar is spelled out in the
+# glossary). G=greedy acq, E=EHVI acq; nom=nomination-only truncation, RT=per-round
+# truncation; K=known tox, P=predicted tox.
 LABELS = {
-    "greedy": "greedy acq · no truncation",
-    "trunc_known": "greedy acq · nomination-trunc · known tox",
-    "trunc_pred": "greedy acq · nomination-trunc · pred tox",
-    "greedy_safe": "greedy acq · per-round trunc · pred tox",
-    "known_safe": "greedy acq · per-round trunc · known tox (upper bd)",
-    "ehvi": "EHVI acq · no truncation",
-    "ehvi_trunc": "EHVI acq · nomination-trunc · pred tox",
-    "ehvi_safe": "EHVI acq · per-round trunc · pred tox",
-    "random": "random", "farthest": "farthest (coverage)",
-    "cluster": "cluster (density)", "info_div": "info-diverse (IterPert-like)",
+    "greedy": "greedy", "trunc_known": "G·nom·K", "trunc_pred": "G·nom·P",
+    "greedy_safe": "G·RT·P", "known_safe": "G·RT·K (upper bd)",
+    "ehvi": "EHVI", "ehvi_trunc": "E·nom·P", "ehvi_safe": "E·RT·P",
+    "random": "random", "farthest": "farthest", "cluster": "cluster",
+    "info_div": "info-div",
 }
 A_ORDER = ["greedy", "trunc_known", "trunc_pred", "greedy_safe", "ehvi", "ehvi_trunc",
            "ehvi_safe", "known_safe", "random", "farthest", "cluster", "info_div"]
@@ -68,6 +65,8 @@ ACQ_LABELS = {"random": "random", "greedy": "greedy/UCB", "farthest": "farthest"
 OP_ORDER = ["none", "cap", "kdpp_emb", "kdpp_corum"]
 OP_LABELS = {"none": "none", "cap": "cap (CORUM)", "kdpp_emb": "k-DPP · embedding",
              "kdpp_corum": "k-DPP · CORUM"}
+OP_SHORT = {"none": "none", "cap": "cap", "kdpp_emb": "kdpp·emb", "kdpp_corum": "kdpp·CORUM"}
+B_BASE_SHORT = {"greedy": "greedy", "truncation": "trunc·K", "ehvi_trunc": "E·nom·P"}
 OP_MARK = {"none": "o", "cap": "s", "kdpp_emb": "D", "kdpp_corum": "^"}
 OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77", "kdpp_corum": "#e0a32e"}
 B_BASE_ORDER = ["greedy", "truncation", "ehvi_trunc"]
@@ -76,15 +75,22 @@ B_BASE_COLOR = {"greedy": "#d1495b", "truncation": "#2e6f95", "ehvi_trunc": "#1b
 _A_METRICS = [("mean_efficacy", "Mean efficacy"),
               ("mean_efficacy_safe", "Mean efficacy (permissible)"),
               ("max_efficacy", "Max efficacy"), ("mean_toxicity", "Mean toxicity"),
-              ("n_safe", "# safe (of K)")]
+              ("n_safe", "# safe (of K)"), ("n_novel", "# novel (of K)")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
               ("n_pathways", "Distinct pathways↑"), ("alpha_ndcg", "α-NDCG↑"),
               ("mean_efficacy", "Mean efficacy↑")]
 
 
 def _ci(x):
-    x = np.asarray(x, float); n = len(x); m = float(x.mean()) if n else float("nan")
+    x = np.asarray(x, float); x = x[~np.isnan(x)]; n = len(x)
+    m = float(x.mean()) if n else float("nan")
     return m, (0.0 if n < 2 else 1.96 * float(x.std(ddof=1)) / np.sqrt(n))
+
+
+def _cell(mn, ci):
+    """Table cell; '—' when a metric is undefined for every fold (e.g. permissible
+    efficacy when a method nominates zero safe genes)."""
+    return "—" if np.isnan(mn) else f"{mn:.3f} ± {ci:.3f}"
 
 
 _TEX = [("±", r"$\pm$"), ("↑", r"$\uparrow$"), ("↓", r"$\downarrow$"),
@@ -247,8 +253,7 @@ def _table_A(d):
     metrics = [(c, lbl) for c, lbl in _A_METRICS if c in d.columns]
     rows = []
     for m in methods:
-        cells = [f"{_ci(d[d.method == m][c])[0]:.3f} ± {_ci(d[d.method == m][c])[1]:.3f}"
-                 for c, _ in metrics]
+        cells = [_cell(*_ci(d[d.method == m][c])) for c, _ in metrics]
         rows.append({"m": LABELS.get(m, m), "cells": cells})
     return [lbl for _, lbl in metrics], rows
 
@@ -280,6 +285,7 @@ def _final_k_bars(dA, src, fig_dir):
     specs = [("mean_efficacy_safe", "permissible efficacy ↑"),
              ("mean_toxicity", "mean toxicity ↓"),
              ("n_safe", "# safe (of K) ↑"),
+             ("n_novel", "# novel/unassayed (of K)"),
              ("concentration", "concentration ↓")]
     specs = [(c, l) for c, l in specs if c in dA.columns]
     fig, axes = plt.subplots(1, len(specs), figsize=(4.0 * len(specs), 4.2))
@@ -371,8 +377,8 @@ def _b_table(d):
             g = d[(d.base == base) & (d.operator == op)]
             if not len(g):
                 continue
-            cells = [f"{_ci(g[c])[0]:.3f} ± {_ci(g[c])[1]:.3f}" for c, _ in _B_METRICS]
-            rows.append({"label": f"{base} + {op}", "cells": cells})
+            cells = [_cell(*_ci(g[c])) for c, _ in _B_METRICS]
+            rows.append({"label": f"{base} + {OP_LABELS.get(op, op)}", "cells": cells})
     return cols, rows
 
 
@@ -383,7 +389,7 @@ def _b_bar(d, src, fig_dir):
         for op in OP_ORDER:
             g = d[(d.base == b) & (d.operator == op)]
             if len(g):
-                labels.append(f"{b}+{op}"); conc.append(_ci(g["concentration"])[0])
+                labels.append(f"{B_BASE_SHORT.get(b, b)}+{OP_SHORT.get(op, op)}"); conc.append(_ci(g["concentration"])[0])
                 rob.append(_ci(g["robustness"])[0])
     x = np.arange(len(labels)); w = 0.4
     fig, ax = plt.subplots(figsize=(max(6, 0.8 * len(labels)), 4.2))
@@ -409,7 +415,7 @@ def _b_eff_conc(d, src, fig_dir):
             xs.append(xc); ys.append(yc)
             ax.scatter(xc, yc, s=72, marker=OP_MARK.get(op, "o"),
                        color=B_BASE_COLOR.get(b, "#444"), edgecolors="white", linewidths=1, zorder=3)
-            ax.annotate(OP_LABELS.get(op, op), (xc, yc), fontsize=7, xytext=(0, 6),
+            ax.annotate(OP_SHORT.get(op, op), (xc, yc), fontsize=7, xytext=(0, 6),
                         textcoords="offset points", ha="center")
         ax.plot(xs, ys, ls=":", lw=1.2, color=B_BASE_COLOR.get(b, "#444"), label=b, zorder=2)
     _despine(ax)
@@ -589,7 +595,7 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 
 _GLOSSARY = """
 <b>Two analyses, two questions, two toxicity definitions.</b><br><br>
-<b>Reading method labels:</b> <code>[acquisition] · [where truncation is applied] · [toxicity source]</code>. <i>acquisition</i> = greedy (UCB on efficacy) or EHVI (dual-objective). <i>truncation</i> = none / nomination-trunc (filter only the final shortlist) / per-round trunc (filter the candidate pool every round). <i>toxicity source</i> = known (oracle) or pred (learned GP). E.g. "greedy acq · nomination-trunc · known tox" = greedy acquisition, post-hoc filter on the known toxicity.<br><br>
+<b>Reading method labels</b> (compact <code>[acq]·[truncation]·[tox]</code>): <b>G</b>=greedy acquisition (UCB on efficacy), <b>E</b>=EHVI (dual-objective); <b>nom</b>=truncation of the final shortlist only, <b>RT</b>=per-round truncation (filter the candidate pool every round); <b>K</b>=known toxicity (oracle), <b>P</b>=predicted toxicity (learned GP). So <code>G·nom·K</code> = greedy acquisition + post-hoc filter on known toxicity (= oracle ceiling); <code>E·RT·P</code> = EHVI + per-round filter on predicted toxicity. <code>random/farthest/cluster/info-div</code> are the no-safety baselines.<br><br>
 <b>Safety rules (Analysis A).</b>
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>truncation · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>truncation · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>trunc_known is the limit the learned rules chase.</i><br><br>
 <b>Constrained acquisition ("+ per-round trunc").</b> The methods above truncate only at nomination. The <b>greedy + per-round trunc</b> / <b>EHVI + per-round trunc</b> / <b>known trunc throughout</b> variants additionally restrict <i>each acquisition round</i> to genes believed safe (predicted, or known for the upper bound) — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination are still distinct stages; this constrains both.<br><br>
