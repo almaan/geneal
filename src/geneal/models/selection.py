@@ -240,8 +240,10 @@ def _kmeans_labels(X: np.ndarray, k: int, rng, n_iter: int = 25) -> np.ndarray:
     k = min(k, n)
     centers = X[rng.choice(n, size=k, replace=False)].copy()
     labels = np.zeros(n, dtype=int)
+    x_sq = (X ** 2).sum(1)
     for _ in range(n_iter):
-        d = np.linalg.norm(X[:, None, :] - centers[None, :, :], axis=2)
+        # ||x-c||^2 via matmul (n x k), avoiding the (n x k x d) broadcast
+        d = x_sq[:, None] + (centers ** 2).sum(1)[None, :] - 2.0 * (X @ centers.T)
         new = d.argmin(axis=1)
         if np.array_equal(new, labels):
             break
@@ -253,13 +255,29 @@ def _kmeans_labels(X: np.ndarray, k: int, rng, n_iter: int = 25) -> np.ndarray:
     return labels
 
 
-def _most_typical(X: np.ndarray, n_neighbors: int) -> int:
-    """Index of the densest point: smallest mean distance to its K nearest."""
+def _most_typical(X: np.ndarray, n_neighbors: int, max_pairwise: int = 1500) -> int:
+    """Index of the densest point: smallest mean distance to its K nearest.
+
+    The full m x m pairwise matrix is O(m^2 d) memory; for large clusters (genome
+    scale) we estimate density against a random reference subsample of size
+    `max_pairwise` (distances computed in row chunks), which bounds memory while
+    leaving the densest-point ranking essentially unchanged."""
     m = X.shape[0]
     if m == 1:
         return 0
     K = min(n_neighbors, m - 1)
-    D = np.linalg.norm(X[:, None, :] - X[None, :, :], axis=2)
-    np.fill_diagonal(D, np.inf)
-    knn_mean = np.sort(D, axis=1)[:, :K].mean(axis=1)
+    if m <= max_pairwise:
+        ref = X
+    else:
+        idx = np.random.default_rng(m).choice(m, size=max_pairwise, replace=False)
+        ref = X[idx]
+    # distances via the matmul identity ||a-b||^2 = |a|^2 + |b|^2 - 2 a.b, so the
+    # temporary is (chunk x |ref|), never (chunk x |ref| x d).
+    ref_sq = (ref ** 2).sum(1)
+    knn_mean = np.empty(m); chunk = 2048
+    for s in range(0, m, chunk):
+        Xi = X[s:s + chunk]
+        d2 = (Xi ** 2).sum(1)[:, None] + ref_sq[None, :] - 2.0 * (Xi @ ref.T)
+        D = np.sqrt(np.maximum(d2, 0.0)); D.sort(axis=1)
+        knn_mean[s:s + chunk] = D[:, 1:K + 1].mean(axis=1)   # skip self-distance (0)
     return int(np.argmin(knn_mean))
