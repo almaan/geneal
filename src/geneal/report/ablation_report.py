@@ -81,8 +81,7 @@ _A_METRICS = [("mean_efficacy", "Mean efficacy"),
               ("n_safe", "# safe (of K)"), ("n_novel", "# novel (of K)"),
               ("hypervolume", "Hypervolume (eff,−tox)")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
-              ("n_pathways", "Distinct pathways↑"), ("alpha_ndcg", "α-NDCG↑"),
-              ("mean_efficacy", "Mean efficacy↑")]
+              ("n_pathways", "Distinct pathways↑"), ("mean_efficacy", "Mean efficacy↑")]
 
 
 def _ci(x):
@@ -653,7 +652,7 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  details.tex code{font-family:ui-monospace,'SF Mono',Menlo,monospace}
 </style></head><body>
 <h1>{{ title }}</h1>
-<div class="sub">{{ meta.n_genes }} genes ({{ panel_label }}) &middot; {{ n_lines }} cell lines &middot; {{ n_seeds }} seeds &middot; K={{ meta.K }} &middot; AL {{ meta.n_rounds }}×{{ meta.batch }} &middot; τ-quantile={{ meta.tau }} &middot; contrast line {{ meta.contrast_line }} &middot; acq={{ meta.acq_score }}{% if meta.joint_gp %} &middot; JOINT GP{% endif %}</div>
+<div class="sub">A: {{ meta.n_genes_a }} genes &middot; B: {{ meta.n_genes_b }} genes &middot; {{ n_lines }} cell lines &middot; {{ n_seeds }} seeds &middot; K={{ meta.K }} &middot; AL {{ meta.n_rounds }}×{{ meta.batch }} &middot; τ={{ meta.tau }} ({{ meta.tau_mode }}) &middot; contrast {{ meta.contrast_line }} &middot; acq={{ meta.acq_score }}{% if meta.joint_gp %} &middot; JOINT GP{% endif %}</div>
 
 <h2>How to read this</h2>
 <div class="gloss">{{ glossary|safe }}</div>
@@ -718,10 +717,8 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             failure_sim=_failure_curve(dB, src, fig_dir))
         facets.append({"block": block, "headline_a": _headline_A(dA)})
 
-    panel = meta.get("panel") or ""
-    panel_label = panel if (panel and panel.lower() != "none") else "full genome"
     html = Environment(loader=BaseLoader()).from_string(_TEMPLATE).render(
-        title=title, meta=meta, panel_label=panel_label,
+        title=title, meta=meta,
         n_lines=df.cell_line.nunique(), n_seeds=df.seed.nunique(),
         glossary=_GLOSSARY, facets=facets)
     out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)

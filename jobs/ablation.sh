@@ -27,9 +27,9 @@ micromamba activate geneal
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8} MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
 
 EMB="${EMB:-data/processed/embeddings/pubmedbert_all.parquet}"
-# PANEL defaults to the 5k panel; set PANEL= (empty) for the full genome.
-PANEL="${PANEL-data/processed/depmap/panel_5k.txt}"
-PANEL_ARG=""; [ -n "$PANEL" ] && PANEL_ARG="--panel $PANEL"
+# Analysis A on the full genome (PANEL_A=none); Analysis B on the 5k subset (PANEL_B).
+PANEL_A="${PANEL_A:-none}"
+PANEL_B="${PANEL_B:-data/processed/depmap/panel_5k.txt}"
 NLINES="${NLINES:-6}"; SEEDS="${SEEDS:-0 1 2}"; K="${K:-30}"
 ROUNDS="${ROUNDS:-8}"; BATCH="${BATCH:-10}"; NINIT="${NINIT:-40}"; TAU="${TAU:-0.5}"
 # JOINT=1 -> learned-safety methods use the joint multitask GP. Empty = independent (default).
@@ -39,10 +39,10 @@ EXPORT_ARG=""; [ -n "${EXPORTFIGS:-}" ] && EXPORT_ARG="--export-figs"
 
 echo "node=$(hostname) cpus=${SLURM_CPUS_PER_TASK} job=${SLURM_JOB_ID}"
 python -c "import geneal" || { echo "geneal import failed"; exit 1; }
-echo "ablation: panel='${PANEL:-FULL GENOME}' ${NLINES} lines x [${SEEDS}] seeds, K=${K}, AL ${ROUNDS}x${BATCH}"
+echo "ablation: A-panel='${PANEL_A}' B-panel='${PANEL_B}' ${NLINES} lines x [${SEEDS}] seeds, K=${K}, AL ${ROUNDS}x${BATCH}"
 
 python -u scripts/run_ablation.py \
-    --embeddings "$EMB" $PANEL_ARG $JOINT_ARG $EXPORT_ARG \
+    --embeddings "$EMB" --panel-a "$PANEL_A" --panel-b "$PANEL_B" $JOINT_ARG $EXPORT_ARG \
     --n-cell-lines "$NLINES" --seeds $SEEDS --K "$K" \
     --n-initial "$NINIT" --n-rounds "$ROUNDS" --batch "$BATCH" --tau "$TAU" \
     --out-root res/runs_ablation

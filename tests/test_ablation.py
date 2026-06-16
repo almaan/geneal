@@ -115,7 +115,7 @@ def test_evaluate_returns_finite_metrics():
                    diversity="cap", tau=0.7, surr_factory=_factory, cap=2)
     m = evaluate(sel, eff, tox, membership, X)
     for key in ("mean_efficacy", "max_efficacy", "mean_toxicity", "concentration",
-                "robustness", "n_pathways", "alpha_ndcg"):
+                "robustness", "n_pathways"):
         assert key in m and np.isfinite(m[key])
 
 

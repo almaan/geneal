@@ -28,7 +28,6 @@ from geneal.models.selection import CoreSet, TypiClust
 from geneal.runner.bivariate import BivariateALRunner
 from geneal.metrics.portfolio import (pathway_concentration, dropout_robustness,
                                       n_pathways_covered)
-from geneal.metrics.panel import AlphaNDCG
 
 # Generic names for representative prior-work acquisitions (not exact
 # reimplementations):
@@ -64,7 +63,8 @@ def _ei(mean, std, incumbent):
     return (mean - incumbent) * norm.cdf(z) + std * norm.pdf(z)
 
 
-def acquire(kind, X, eff, revealed, cand, batch, rng, surr_factory, score="ucb"):
+def acquire(kind, X, eff, revealed, cand, batch, rng, surr_factory, score="ucb",
+            info_pool=300):
     """One round of a single-objective acquisition. Returns `batch` new global
     indices drawn from `cand` (the unrevealed set). `score` selects the
     quality-aware rule for kind='greedy': 'ucb' (mu+2 sigma) or 'ei' (expected
@@ -95,15 +95,21 @@ def acquire(kind, X, eff, revealed, cand, batch, rng, surr_factory, score="ucb")
     if kind == "info_div":
         # informative-diverse batch: quality-weighted k-DPP at acquisition time.
         # quality = UCB/EI; diversity = dense embedding-cosine S over candidates.
+        # SHORTLIST to the top-`info_pool` by quality before building the (N^2)
+        # similarity, so this stays cheap at genome scale.
         from geneal.models.selection import _greedy_map_logdet
         eff = np.asarray(eff, float)
         s = surr_factory().fit(X[revealed], eff[revealed])
         m, sd = s.predict(X[cand])
         if score == "ei":
-            q = _ei(m, sd, float(eff[revealed].max()))
+            qa = _ei(m, sd, float(eff[revealed].max()))
         else:
-            q = np.asarray(m) + 2.0 * np.asarray(sd)
-        q = np.asarray(q, float); q = q - q.min() + 1e-6
+            qa = np.asarray(m) + 2.0 * np.asarray(sd)
+        qa = np.asarray(qa, float)
+        if len(cand) > info_pool:
+            keep = np.argsort(qa)[::-1][:info_pool]
+            cand = [cand[i] for i in keep]; qa = qa[keep]
+        q = qa - qa.min() + 1e-6
         Sc = build_embedding_S(X[cand])
         L = (q[:, None] * Sc) * q[None, :]
         L = (L + L.T) / 2 + 1e-9 * np.eye(len(q))
@@ -285,17 +291,13 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
 # --------------------------------------------------------------------------- #
 # Evaluate (true-value metrics for a nominated portfolio)                      #
 # --------------------------------------------------------------------------- #
-def evaluate(pick, eff, tox, membership, X, tox_ceiling=None):
-    """TRUE-value metrics for a nominated set. eff/tox are ground truth; X the
-    PubMedBERT panel embeddings (for alpha-NDCG nugget clustering). If
+def evaluate(pick, eff, tox, membership, X=None, tox_ceiling=None):
+    """TRUE-value metrics for a nominated set. eff/tox are ground truth. If
     `tox_ceiling` is given, also count nominees whose TRUE toxicity is at/below
     (safe) vs above (toxic) the ceiling -- a direct count of how many of the K
-    picks are actually tolerable."""
+    picks are actually tolerable. (X is accepted for API compatibility; unused.)"""
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
     pick = list(pick)
-    # alpha-NDCG over the picks ordered by true efficacy (deterministic)
-    order = sorted(pick, key=lambda g: -eff[g])
-    andcg = AlphaNDCG(k=len(pick) or 1).evaluate(order, eff, np.asarray(X, float))
     out = {
         "mean_efficacy": float(np.mean(eff[pick])),
         "max_efficacy": float(np.max(eff[pick])),
@@ -306,7 +308,6 @@ def evaluate(pick, eff, tox, membership, X, tox_ceiling=None):
         # ratios blow past 1. Clip at 0.
         "robustness": float(dropout_robustness(pick, membership, np.clip(eff, 0.0, None))),
         "n_pathways": int(n_pathways_covered(pick, membership)),
-        "alpha_ndcg": float(andcg),
     }
     if tox_ceiling is not None:
         pe = np.asarray(pick)

@@ -53,8 +53,10 @@ ACQ_SPECS = {
     "ehvi_safe":    ("ehvi",     "pred"),   # EHVI, truncate-each-round (predicted)
     "known_safe":   ("greedy",   "known"),  # truncate-each-round (KNOWN tox) = upper bound
 }
-# acquisitions that do NOT depend on the toxicity definition (run once per line,seed)
-_TOX_INDEP_ACQ = ["random", "greedy", "farthest", "cluster", "info_div"]
+# acquisitions that do NOT depend on the toxicity definition (run once per line,seed).
+# 'farthest' is implemented (ACQ_SPECS/CoreSet) but omitted from the analysis for
+# now (its pairwise-distance step is memory-heavy at genome scale).
+_TOX_INDEP_ACQ = ["random", "greedy", "cluster", "info_div"]
 _TOX_DEP_ACQ = ["ehvi", "greedy_safe", "ehvi_safe", "known_safe"]
 
 # Analysis A method: (label, acq_key, nominate_safety). diversity = none.
@@ -69,7 +71,6 @@ ANALYSIS_A = [
     ("ehvi_safe",    "ehvi_safe",   "pred"),   # EHVI + per-round filter (predicted)
     ("known_safe",   "known_safe",  "known"),  # KNOWN truncation throughout (upper bound)
     ("random",       "random",      "none"),
-    ("farthest",     "farthest",    "none"),
     ("cluster",      "cluster",     "none"),
     ("info_div",     "info_div",    "none"),
 ]
@@ -90,8 +91,6 @@ DIVERSITY_OPS = [
 ]
 MAX_DROP = 5   # failure-simulation horizon (# pathways dropped)
 TOX_SOURCES = ["contrast", "aggregate"]
-# acquisitions that do NOT depend on the toxicity definition (computed once/line,seed)
-_TOX_INDEP_ACQ = ["random", "greedy", "farthest", "cluster", "info_div"]
 
 
 def _factory(n_iters):
@@ -109,8 +108,11 @@ def main():
     ap.add_argument("--gene-effect", default="data/processed/depmap/gene_effect.parquet")
     ap.add_argument("--embeddings", default="data/processed/embeddings/pubmedbert_all.parquet",
                     help="PubMedBERT embedding parquet (genome-wide cache; use --panel to subset)")
-    ap.add_argument("--panel", default="data/processed/depmap/panel_5k.txt",
-                    help="entrez-id panel file; pass '' or 'none' for the full genome")
+    ap.add_argument("--panel-a", default="none",
+                    help="candidate panel for Analysis A (safety/efficacy); 'none' = full genome (default)")
+    ap.add_argument("--panel-b", default="data/processed/depmap/panel_5k.txt",
+                    help="candidate panel for Analysis B (diversity); default = 5k subset "
+                         "(the N^2 k-DPP similarities are built on this pool)")
     ap.add_argument("--string", default="data/processed/depmap/string_edges_all.parquet")
     ap.add_argument("--kdpp-sim", choices=["embedding", "string"], default="embedding",
                     help="k-DPP similarity S: 'embedding' = dense PubMedBERT cosine "
@@ -166,15 +168,20 @@ def main():
         print("joint multitask GP enabled for learned-safety methods (trunc_pred, ehvi)")
 
     ge = load_gene_effect(args.gene_effect)
-    emb = pd.read_parquet(args.embeddings)
-    panel = (args.panel or "").strip()
-    if panel and panel.lower() != "none":
-        keep = set(int(x) for x in Path(panel).read_text().split())
-        emb = emb[emb.index.isin(keep)]
-        print(f"panel subset: {len(emb)} genes ({panel})")
-    else:
-        print(f"full genome: {len(emb)} genes")
-    embset = set(emb.index)
+    emb_full = pd.read_parquet(args.embeddings)
+
+    def subset_emb(panel):
+        p = (panel or "").strip()
+        if not p or p.lower() == "none":
+            return emb_full
+        keep = set(int(x) for x in Path(p).read_text().split())
+        return emb_full[emb_full.index.isin(keep)]
+
+    emb_a = subset_emb(args.panel_a)        # Analysis A candidate pool (default full genome)
+    emb_b = subset_emb(args.panel_b)        # Analysis B candidate pool (default 5k subset)
+    print(f"Analysis A panel: {len(emb_a)} genes ({args.panel_a}); "
+          f"Analysis B panel: {len(emb_b)} genes ({args.panel_b})")
+    embset = set(emb_a.index)
     labs = [g for g in ge.index if parse_entrez(g) in embset]
 
     # ranked contrast-line candidates (most normal-like first)
@@ -208,97 +215,100 @@ def main():
                     n_safe=int(safe.sum()),
                     mean_efficacy_safe=float(e[safe].mean()) if safe.any() else float("nan"))
 
+    def build_line(emb_x, cl):
+        ds, _ = build_selective_dataset(ge, emb_x, cl, lam=0.0, thresh=args.thresh)
+        X = StandardScaler().fit_transform(ds.embeddings)
+        eff = np.asarray(ds.target, float)
+        mem = corum_membership(ds.gene_names)
+        tox = {src: toxicity_vector(ge, ds.gene_names, src, target_line=cl,
+                                    contrast_line=contrast_line, thresh=args.thresh)
+               for src in TOX_SOURCES}
+        return X, eff, mem, tox
+
+    B_ACQ = sorted({acq for _, acq, _ in B_BASES})   # acquisitions Analysis B needs
     rows, scatters, assayed_rows, round_rows = [], [], [], []
     for cl in lines:
-        ds, aux = build_selective_dataset(ge, emb, cl, lam=0.0, thresh=args.thresh)
-        X = StandardScaler().fit_transform(ds.embeddings)
-        eff = np.asarray(ds.target, float)            # raw lethality in this line
-        mem = corum_membership(ds.gene_names)
-        # k-DPP similarities: learned embedding cosine vs external CORUM pathway
-        # matrix (the Section-B similarity ablation).
-        S_emb = build_embedding_S(X)
-        S_corum = build_corum_S(mem, len(eff))
-        S_by_src = {"embedding": S_emb, "corum": S_corum}
-        tox_by_source = {
-            src: toxicity_vector(ge, ds.gene_names, src, target_line=cl,
-                                 contrast_line=contrast_line, thresh=args.thresh)
-            for src in TOX_SOURCES}
-        print(f"[{cl}] {len(eff)} genes, {sum(bool(v) for v in mem.values())} CORUM-annotated")
+        Xa, effa, mema, toxa_by_src = build_line(emb_a, cl)          # A: full genome
+        Xb, effb, memb, toxb_by_src = build_line(emb_b, cl)          # B: subset
+        S_by_src = {"embedding": build_embedding_S(Xb),             # N^2 only on the B subset
+                    "corum": build_corum_S(memb, len(effb))}
+        print(f"[{cl}] A={len(effa)} genes, B={len(effb)} genes")
 
         for seed in args.seeds:
-            # tox-independent acquisitions (acq_safety=none): run once per (line, seed),
-            # keep the per-round history.
-            hist_indep = {k: run_acquisition(k, X, eff, None, seed=seed,
-                                             score=args.acq_score, return_history=True,
-                                             **common)[1]
-                          for k in _TOX_INDEP_ACQ}
+            # ===================== Analysis A (full-genome pool) =====================
+            histA = {k: run_acquisition(k, Xa, effa, None, seed=seed, score=args.acq_score,
+                                        return_history=True, **common)[1]
+                     for k in _TOX_INDEP_ACQ}
             for src in TOX_SOURCES:
-                tox = tox_by_source[src]
-                ceiling = _tox_threshold(tox, args.tau, args.tau_mode)
-                # tox-dependent acquisitions (ehvi + constrained), per source, with history
-                hist = dict(hist_indep)
+                toxa = toxa_by_src[src]; ceil_a = _tox_threshold(toxa, args.tau, args.tau_mode)
                 for k in _TOX_DEP_ACQ:
                     kind, acqsaf = ACQ_SPECS[k]
-                    hist[k] = run_acquisition(kind, X, eff, tox, seed=seed,
-                                              ehvi_samples=args.ehvi_samples,
-                                              shortlist=args.shortlist, score=args.acq_score,
-                                              joint_factory=joint_factory, acq_safety=acqsaf,
-                                              tau=args.tau, tau_mode=args.tau_mode,
-                                              return_history=True, **common)[1]
-                # assayed-set stats: final revealed (the ~120 measured) per acquisition
-                for k, h in hist.items():
-                    m = evaluate(h[-1], eff, tox, mem, X, tox_ceiling=ceiling)
+                    histA[k] = run_acquisition(kind, Xa, effa, toxa, seed=seed,
+                                               ehvi_samples=args.ehvi_samples,
+                                               shortlist=args.shortlist, score=args.acq_score,
+                                               joint_factory=joint_factory, acq_safety=acqsaf,
+                                               tau=args.tau, tau_mode=args.tau_mode,
+                                               return_history=True, **common)[1]
+                for k, h in histA.items():
+                    m = evaluate(h[-1], effa, toxa, mema, tox_ceiling=ceil_a)
                     assayed_rows.append(dict(tox_source=src, acq=k, cell_line=cl,
                                              seed=seed, n_assayed=len(h[-1]), **m))
-                want_scatter = (seed == args.seeds[0])
-                picks = {}
-                # Analysis A (final) + per-round curves
+                want_scatter = (seed == args.seeds[0]); picks = {}
                 for label, acq_key, safety in ANALYSIS_A:
-                    h = hist[acq_key]
+                    h = histA[acq_key]
                     for r, rev_r in enumerate(h):
-                        a = quick(rev_r, eff, tox, ceiling)                       # assayed-so-far
-                        seln = nominate(rev_r, X, eff, tox, mem, safety=safety,
+                        a = quick(rev_r, effa, toxa, ceil_a)
+                        seln = nominate(rev_r, Xa, effa, toxa, mema, safety=safety,
                                         diversity="none", S=None, **nom_common)
-                        nq = quick(seln, eff, tox, ceiling)                       # nomination
+                        nq = quick(seln, effa, toxa, ceil_a)
                         round_rows.append(dict(
                             tox_source=src, method=label, cell_line=cl, seed=seed, round=r,
-                            n_assayed=len(rev_r),
-                            assayed_mean_efficacy=a["mean_efficacy"],
+                            n_assayed=len(rev_r), assayed_mean_efficacy=a["mean_efficacy"],
                             assayed_mean_toxicity=a["mean_toxicity"], assayed_n_safe=a["n_safe"],
                             nom_mean_efficacy=nq["mean_efficacy"],
                             nom_mean_efficacy_safe=nq["mean_efficacy_safe"],
                             nom_mean_toxicity=nq["mean_toxicity"], nom_n_safe=nq["n_safe"]))
-                    sel = nominate(h[-1], X, eff, tox, mem, safety=safety,
+                    sel = nominate(h[-1], Xa, effa, toxa, mema, safety=safety,
                                    diversity="none", S=None, **nom_common)
-                    m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
-                    n_novel = len(set(sel) - set(h[-1]))   # nominees NOT already assayed
-                    rows.append(dict(analysis="A", tox_source=src, method=label,
-                                     base=label, operator="none", acq=acq_key,
-                                     safety=safety, cell_line=cl, seed=seed,
-                                     n_novel=n_novel, **m))
+                    m = evaluate(sel, effa, toxa, mema, tox_ceiling=ceil_a)
+                    rows.append(dict(analysis="A", tox_source=src, method=label, base=label,
+                                     operator="none", acq=acq_key, safety=safety, cell_line=cl,
+                                     seed=seed, n_novel=len(set(sel) - set(h[-1])), **m))
                     if want_scatter:
                         picks[label] = set(sel)
-                # Analysis B (final only): 3 bases x {none, cap, kdpp_emb, kdpp_corum}
+                if want_scatter:
+                    sc = pd.DataFrame({"efficacy": effa, "toxicity": toxa})
+                    for label, pk in picks.items():
+                        sc[f"pick_{label}"] = [i in pk for i in range(len(effa))]
+                    sc["cell_line"] = cl; sc["tox_source"] = src
+                    scatters.append(sc)
+
+            # ===================== Analysis B (subset pool) =====================
+            histB = {"greedy": run_acquisition("greedy", Xb, effb, None, seed=seed,
+                                               score=args.acq_score, return_history=True,
+                                               **common)[1]} if "greedy" in B_ACQ else {}
+            for src in TOX_SOURCES:
+                toxb = toxb_by_src[src]; ceil_b = _tox_threshold(toxb, args.tau, args.tau_mode)
+                if "ehvi" in B_ACQ:
+                    histB["ehvi"] = run_acquisition("ehvi", Xb, effb, toxb, seed=seed,
+                                                    ehvi_samples=args.ehvi_samples,
+                                                    shortlist=args.shortlist, score=args.acq_score,
+                                                    joint_factory=joint_factory,
+                                                    return_history=True, **common)[1]
                 for base_label, acq_key, safety in B_BASES:
                     for op_label, mode, simsrc in DIVERSITY_OPS:
                         Sb = S_by_src.get(simsrc) if simsrc else None
-                        rev_final = hist[acq_key][-1]
-                        sel = nominate(rev_final, X, eff, tox, mem, safety=safety,
+                        rev_final = histB[acq_key][-1]
+                        sel = nominate(rev_final, Xb, effb, toxb, memb, safety=safety,
                                        diversity=mode, S=Sb, **nom_common)
-                        m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
-                        dc = dropout_curve(sel, mem, eff, MAX_DROP)   # value-of-diversity
-                        n_novel = len(set(sel) - set(rev_final))
+                        m = evaluate(sel, effb, toxb, memb, tox_ceiling=ceil_b)
+                        dc = dropout_curve(sel, memb, effb, MAX_DROP)
                         rows.append(dict(analysis="B", tox_source=src,
                                          method=f"{base_label}+{op_label}", base=base_label,
                                          operator=op_label, acq=acq_key, safety=safety,
-                                         cell_line=cl, seed=seed, n_novel=n_novel, **m,
+                                         cell_line=cl, seed=seed,
+                                         n_novel=len(set(sel) - set(rev_final)), **m,
                                          **{f"drop_{i}": dc[i] for i in range(len(dc))}))
-                if want_scatter:
-                    sc = pd.DataFrame({"efficacy": eff, "toxicity": tox})
-                    for label, pk in picks.items():
-                        sc[f"pick_{label}"] = [i in pk for i in range(len(eff))]
-                    sc["cell_line"] = cl; sc["tox_source"] = src
-                    scatters.append(sc)
         print(f"[{cl}] done ({len(args.seeds)} seeds x {len(TOX_SOURCES)} tox-sources)")
 
     # ---- Persist + report ----
@@ -312,7 +322,9 @@ def main():
         scatter_df.to_parquet(out / "scatter.parquet")
     assayed_df = pd.DataFrame(assayed_rows); assayed_df.to_parquet(out / "assayed.parquet")
     rounds_df = pd.DataFrame(round_rows); rounds_df.to_parquet(out / "rounds.parquet")
-    meta = dict(panel=panel, n_genes=int(len(eff)), lines=lines, seeds=list(args.seeds),
+    meta = dict(panel_a=args.panel_a, panel_b=args.panel_b,
+                n_genes_a=int(len(emb_a)), n_genes_b=int(len(emb_b)),
+                lines=lines, seeds=list(args.seeds),
                 K=args.K, tau=args.tau, cap=args.cap, n_rounds=args.n_rounds,
                 batch=args.batch, kdpp_sim=args.kdpp_sim, acq_score=args.acq_score,
                 tau_mode=args.tau_mode, joint_gp=bool(args.joint_gp),
