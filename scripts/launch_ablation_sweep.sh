@@ -11,6 +11,7 @@
 set -euo pipefail
 N_LINES="${1:-12}"
 SEEDS="${SEEDS:-0 1}"; JOINT="${JOINT:-}"; TAG="${TAG:-${JOINT:+joint}${JOINT:-indep}}"
+PANEL_A="${PANEL_A:-none}"; PANEL_B="${PANEL_B:-data/processed/depmap/panel_5k.txt}"
 EMB="${EMB:-data/processed/embeddings/pubmedbert_all.parquet}"
 GE="data/processed/depmap/gene_effect.parquet"
 TS="$(date +%Y%m%d-%H%M%S)"; ROOT="res/runs_ablation/sweep_${TAG}_${TS}"; mkdir -p "$ROOT" logs
@@ -39,7 +40,7 @@ echo "sweep -> $ROOT  ($NL lines x [$SEEDS] seeds, JOINT='${JOINT}', contrast=$C
 
 # 2. One array task per line (parallel).
 ARRAY_ID=$(sbatch --parsable --array="0-$((NL-1))" \
-    --export=ALL,ROOT="$ROOT",SEEDS="$SEEDS",JOINT="$JOINT",CONTRAST="$CONTRAST",EMB="$EMB" \
+    --export=ALL,ROOT="$ROOT",SEEDS="$SEEDS",JOINT="$JOINT",CONTRAST="$CONTRAST",EMB="$EMB",PANEL_A="$PANEL_A",PANEL_B="$PANEL_B" \
     jobs/ablation_shard.sh)
 echo "shard array job: $ARRAY_ID"
 
