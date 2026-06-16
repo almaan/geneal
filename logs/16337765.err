@@ -1,0 +1,2 @@
+/cv/data/braid/andera29/projs/gene-al/scripts/run_ablation.py:103: Pandas4Warning: Starting with pandas version 4.0 all arguments of sum will be keyword-only.
+  lines = ge.loc[labs].isna().sum(0).sort_values().index[:args.n_cell_lines].tolist()

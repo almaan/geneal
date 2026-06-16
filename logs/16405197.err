@@ -1,0 +1,30 @@
+Traceback (most recent call last):
+  File "/cv/data/braid/andera29/projs/gene-al/scripts/run_ablation.py", line 346, in <module>
+    main()
+  File "/cv/data/braid/andera29/projs/gene-al/scripts/run_ablation.py", line 329, in main
+    sub = d[(d.analysis == "B") & (d.base == base_label) & (d.operator == op)]
+                                                            ^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/ops/common.py", line 85, in new_method
+    return method(self, other)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/arraylike.py", line 42, in __eq__
+    return self._cmp_method(other, operator.eq)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/series.py", line 6735, in _cmp_method
+    res_values = ops.comparison_op(lvalues, rvalues, op)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/ops/array_ops.py", line 341, in comparison_op
+    res_values = op(lvalues, rvalues)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/ops/common.py", line 85, in new_method
+    return method(self, other)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/arraylike.py", line 42, in __eq__
+    return self._cmp_method(other, operator.eq)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/arrays/string_arrow.py", line 590, in _cmp_method
+    result = super()._cmp_method(other, op)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cv/scratch/u/andera29/micromamba/envs/geneal/lib/python3.12/site-packages/pandas/core/arrays/arrow/array.py", line 957, in _cmp_method
+    raise NotImplementedError(
+NotImplementedError: eq not implemented for <class 'tuple'>

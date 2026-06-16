@@ -1,0 +1,60 @@
+node=braid-st-comp-48xl-16 cpus=16 job=16340013
+ablation: panel='data/processed/depmap/panel_5k.txt' 6 lines x [0 1 2] seeds, K=30, AL 8x10
+panel subset: 5116 genes (data/processed/depmap/panel_5k.txt)
+contrast-line candidates (best first): ['ACH-001360', 'ACH-000608', 'ACH-000934', 'ACH-002806', 'ACH-000571', 'ACH-000811', 'ACH-001422', 'ACH-001513', 'ACH-001194', 'ACH-003184']
+using contrast line: ACH-001360
+target lines (6): ['ACH-000696', 'ACH-000147', 'ACH-000183', 'ACH-000067', 'ACH-000900', 'ACH-000527']
+[ACH-000696] 5113 genes, 2457 CORUM-annotated
+[ACH-000696] done (3 seeds x 2 tox-sources)
+[ACH-000147] 5056 genes, 2454 CORUM-annotated
+[ACH-000147] done (3 seeds x 2 tox-sources)
+[ACH-000183] 5056 genes, 2454 CORUM-annotated
+[ACH-000183] done (3 seeds x 2 tox-sources)
+[ACH-000067] 5056 genes, 2454 CORUM-annotated
+[ACH-000067] done (3 seeds x 2 tox-sources)
+[ACH-000900] 5056 genes, 2454 CORUM-annotated
+[ACH-000900] done (3 seeds x 2 tox-sources)
+[ACH-000527] 5056 genes, 2454 CORUM-annotated
+[ACH-000527] done (3 seeds x 2 tox-sources)
+
+=== [contrast toxicity] 6 lines x 3 seeds (mean +/- 95% CI) ===
+[A: safety vs efficacy]
+  greedy       eff 2.588+/-0.205  tox 2.237+/-0.091
+  trunc_known  eff 1.056+/-0.198  tox 0.019+/-0.009
+  trunc_pred   eff 1.250+/-0.212  tox 0.416+/-0.135
+  ehvi         eff 1.125+/-0.275  tox 0.396+/-0.213
+  random       eff 1.708+/-0.191  tox 1.523+/-0.210
+  farthest     eff 1.090+/-0.055  tox 0.911+/-0.041
+  cluster      eff 2.236+/-0.094  tox 2.089+/-0.058
+  info_div     eff 2.310+/-0.141  tox 2.069+/-0.139
+[B: diversity / robustness]
+  greedy     +none  conc 0.834 robust 0.777 eff 2.588
+  greedy     +cap   conc 0.118 robust 0.933 eff 1.488
+  greedy     +kdpp  conc 0.686 robust 0.848 eff 2.487
+  truncation +none  conc 0.355 robust 0.892 eff 1.056
+  truncation +cap   conc 0.124 robust 0.913 eff 0.764
+  truncation +kdpp  conc 0.344 robust 0.900 eff 1.030
+  ehvi       +none  conc 0.575 robust 0.892 eff 1.125
+  ehvi       +cap   conc 0.172 robust 0.949 eff 0.932
+  ehvi       +kdpp  conc 0.409 robust 0.938 eff 1.008
+
+=== [aggregate toxicity] 6 lines x 3 seeds (mean +/- 95% CI) ===
+[A: safety vs efficacy]
+  greedy       eff 2.588+/-0.205  tox 0.915+/-0.022
+  trunc_known  eff 0.277+/-0.053  tox 0.052+/-0.003
+  trunc_pred   eff 1.308+/-0.310  tox 0.478+/-0.089
+  ehvi         eff 0.683+/-0.079  tox 0.319+/-0.042
+  random       eff 1.708+/-0.191  tox 0.856+/-0.028
+  farthest     eff 1.090+/-0.055  tox 0.664+/-0.028
+  cluster      eff 2.236+/-0.094  tox 0.933+/-0.009
+  info_div     eff 2.310+/-0.141  tox 0.911+/-0.029
+[B: diversity / robustness]
+  greedy     +none  conc 0.834 robust 0.777 eff 2.588
+  greedy     +cap   conc 0.118 robust 0.933 eff 1.488
+  greedy     +kdpp  conc 0.686 robust 0.848 eff 2.487
+  truncation +none  conc 0.204 robust 0.950 eff 0.277
+  truncation +cap   conc 0.128 robust 0.955 eff 0.271
+  truncation +kdpp  conc 0.149 robust 0.954 eff 0.290
+  ehvi       +none  conc 0.189 robust 0.953 eff 0.683
+  ehvi       +cap   conc 0.133 robust 0.957 eff 0.677
+  ehvi       +kdpp  conc 0.142 robust 0.957 eff 0.639

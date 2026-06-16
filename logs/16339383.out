@@ -1,0 +1,15 @@
+node=braid-st-comp-48xl-16 cpus=16 job=16339383
+ablation: panel='data/processed/depmap/panel_5k.txt' 6 lines x [0 1 2] seeds, K=30, AL 8x10
+panel subset: 5116 genes (data/processed/depmap/panel_5k.txt)
+cell lines (6): ['ACH-000696', 'ACH-000147', 'ACH-000183', 'ACH-000067', 'ACH-000900', 'ACH-000527']
+[ACH-000696] 5113 genes, 2457 CORUM-annotated
+[ACH-000696] Analysis A done (3 seeds)
+[ACH-000147] 5056 genes, 2454 CORUM-annotated
+[ACH-000147] Analysis A done (3 seeds)
+[ACH-000183] 5056 genes, 2454 CORUM-annotated
+[ACH-000183] Analysis A done (3 seeds)
+[ACH-000067] 5056 genes, 2454 CORUM-annotated
+[ACH-000067] Analysis A done (3 seeds)
+[ACH-000900] 5056 genes, 2454 CORUM-annotated
+[ACH-000900] Analysis A done (3 seeds)
+[ACH-000527] 5056 genes, 2454 CORUM-annotated

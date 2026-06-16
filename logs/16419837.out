@@ -1,0 +1,29 @@
+node=braid-st-comp-48xl-9 cpus=16 job=16419837
+ablation: A-panel='none' B-panel='data/processed/depmap/panel_5k.txt' 12 lines x [0 1] seeds, K=30, AL 8x10
+Analysis A panel: 18531 genes (none); Analysis B panel: 5116 genes (data/processed/depmap/panel_5k.txt)
+contrast-line candidates (best first): ['ACH-001360', 'ACH-000608', 'ACH-000934', 'ACH-002806', 'ACH-000571', 'ACH-000811', 'ACH-001422', 'ACH-001513', 'ACH-001194', 'ACH-003184']
+using contrast line: ACH-001360
+target lines (12): ['ACH-000696', 'ACH-000362', 'ACH-000147', 'ACH-000067', 'ACH-000183', 'ACH-000527', 'ACH-000900', 'ACH-000168', 'ACH-000804', 'ACH-001054', 'ACH-000583', 'ACH-001401']
+[ACH-000696] A=18513 genes, B=5113 genes
+[ACH-000696] done (2 seeds x 2 tox-sources)
+[ACH-000362] A=18449 genes, B=5055 genes
+[ACH-000362] done (2 seeds x 2 tox-sources)
+[ACH-000147] A=18435 genes, B=5056 genes
+[ACH-000147] done (2 seeds x 2 tox-sources)
+[ACH-000067] A=18435 genes, B=5056 genes
+[ACH-000067] done (2 seeds x 2 tox-sources)
+[ACH-000183] A=18435 genes, B=5056 genes
+[ACH-000183] done (2 seeds x 2 tox-sources)
+[ACH-000527] A=18435 genes, B=5056 genes
+[ACH-000527] done (2 seeds x 2 tox-sources)
+[ACH-000900] A=18433 genes, B=5056 genes
+[ACH-000900] done (2 seeds x 2 tox-sources)
+[ACH-000168] A=18420 genes, B=5044 genes
+[ACH-000168] done (2 seeds x 2 tox-sources)
+[ACH-000804] A=18420 genes, B=5044 genes
+[ACH-000804] done (2 seeds x 2 tox-sources)
+[ACH-001054] A=18420 genes, B=5044 genes
+[ACH-001054] done (2 seeds x 2 tox-sources)
+[ACH-000583] A=18420 genes, B=5044 genes
+[ACH-000583] done (2 seeds x 2 tox-sources)
+[ACH-001401] A=18420 genes, B=5044 genes

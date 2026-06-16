@@ -1,0 +1,13 @@
+{
+  "n_rows": 198,
+  "methods": [
+    "coreset",
+    "fantasy",
+    "greedy",
+    "kdpp",
+    "random",
+    "typiclust"
+  ],
+  "metric_name": "recall@50",
+  "cell_line": "ACH-000696"
+}

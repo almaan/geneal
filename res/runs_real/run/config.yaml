@@ -1,0 +1,13 @@
+gene_effect: data/processed/depmap/gene_effect.parquet
+embeddings: data/processed/embeddings/esm2_small.parquet
+cell_line: ACH-000696
+k: 50
+rounds: 10
+batch: 10
+n_initial: 50
+sigma: 0.1
+seeds:
+- 0
+- 1
+- 2
+out_root: res/runs_real

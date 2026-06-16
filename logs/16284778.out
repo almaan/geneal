@@ -1,0 +1,35 @@
+node=braid-st-comp-48xl-13 cpus=32 job=16284778
+python: /cv/scratch/u/andera29/micromamba/envs/geneal/bin/python
+risk-large full-genome: 40 lines x 6 seeds x 24 shards, K=30
+launch: 40 lines x 6 seeds across 24 shards, K=30 -> res/runs_risk/launch_20260614-224649
+selected 40 lines, sharded into 24
+  shard 0 launched (pid 2093778, 2 lines)
+  shard 1 launched (pid 2093783, 2 lines)
+  shard 2 launched (pid 2093789, 2 lines)
+  shard 3 launched (pid 2093796, 2 lines)
+  shard 4 launched (pid 2093801, 2 lines)
+  shard 5 launched (pid 2093807, 2 lines)
+  shard 6 launched (pid 2093813, 2 lines)
+  shard 7 launched (pid 2093819, 2 lines)
+  shard 8 launched (pid 2093828, 2 lines)
+  shard 9 launched (pid 2093837, 2 lines)
+  shard 10 launched (pid 2093847, 2 lines)
+  shard 11 launched (pid 2093857, 2 lines)
+  shard 12 launched (pid 2093867, 2 lines)
+  shard 13 launched (pid 2093881, 2 lines)
+  shard 14 launched (pid 2093894, 2 lines)
+  shard 15 launched (pid 2093908, 2 lines)
+  shard 16 launched (pid 2093924, 1 lines)
+  shard 17 launched (pid 2093935, 1 lines)
+  shard 18 launched (pid 2093950, 1 lines)
+  shard 19 launched (pid 2093974, 1 lines)
+  shard 20 launched (pid 2093990, 1 lines)
+  shard 21 launched (pid 2094008, 1 lines)
+  shard 22 launched (pid 2094022, 1 lines)
+  shard 23 launched (pid 2094036, 1 lines)
+all shards done (fail=0)
+
+=== COMBINED: 40 lines x 6 seeds (mean +/- 95% CI) ===
+
+[selective_lethality]
+DONE

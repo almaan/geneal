@@ -1,0 +1,41 @@
+node=braid-st-comp-48xl-15 cpus=16 job=16337765
+ablation: panel='data/processed/depmap/panel_5k.txt' 6 lines x [0 1 2] seeds, K=30, AL 8x10
+panel subset: 5116 genes (data/processed/depmap/panel_5k.txt)
+cell lines (6): ['ACH-000696', 'ACH-000147', 'ACH-000183', 'ACH-000067', 'ACH-000900', 'ACH-000527']
+[ACH-000696] 5113 genes, 2457 CORUM-annotated
+[ACH-000696] Analysis A done (3 seeds)
+[ACH-000147] 5056 genes, 2454 CORUM-annotated
+[ACH-000147] Analysis A done (3 seeds)
+[ACH-000183] 5056 genes, 2454 CORUM-annotated
+[ACH-000183] Analysis A done (3 seeds)
+[ACH-000067] 5056 genes, 2454 CORUM-annotated
+[ACH-000067] Analysis A done (3 seeds)
+[ACH-000900] 5056 genes, 2454 CORUM-annotated
+[ACH-000900] Analysis A done (3 seeds)
+[ACH-000527] 5056 genes, 2454 CORUM-annotated
+[ACH-000527] Analysis A done (3 seeds)
+
+safety rules (eff, tox): {'truncation': (0.949, 0.212), 'ehvi': (0.901, 0.47)} -> best-safety base = truncation
+Analysis B done
+
+=== aggregate over 6 lines x 3 seeds (mean +/- 95% CI) ===
+
+[Analysis A: safety vs efficacy]
+  greedy       eff 2.588+/-0.205  tox 0.915+/-0.022
+  truncation   eff 0.949+/-0.197  tox 0.212+/-0.021
+  ehvi         eff 0.901+/-0.113  tox 0.470+/-0.068
+  random       eff 1.708+/-0.191  tox 0.856+/-0.028
+  coreset      eff 1.090+/-0.055  tox 0.664+/-0.028
+  typiclust    eff 2.236+/-0.094  tox 0.933+/-0.009
+
+[Analysis B: diversity / robustness]
+  greedy            +none   conc 0.834+/-0.081  robust 0.777+/-0.048  eff 2.588
+  greedy            +cap    conc 0.118+/-0.011  robust 0.933+/-0.012  eff 1.488
+  greedy            +kdpp   conc 0.204+/-0.050  robust 0.929+/-0.015  eff 1.373
+  best-safety[truncation]+none   conc 0.351+/-0.084  robust 0.900+/-0.023  eff 0.949
+  best-safety[truncation]+cap    conc 0.125+/-0.012  robust 0.918+/-0.022  eff 0.631
+  best-safety[truncation]+kdpp   conc 0.178+/-0.038  robust 0.924+/-0.022  eff 0.486
+
+report -> res/runs_ablation/20260615-183617/report.html
+run dir: res/runs_ablation/20260615-183617
+DONE

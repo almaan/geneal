@@ -1,0 +1,36 @@
+cell lines: ['ACH-001401', 'ACH-002142']
+report -> res/runs_risk/launch_20260614-224649/shard_11/report.html
+
+=== aggregate over 2 lines x 6 seeds (mean +/- 95%% CI) ===
+
+[mean_efficacy]
+  efficacy         0.341 +/- 0.226
+  constrained      0.071 +/- 0.056
+  constrained_cap2 0.059 +/- 0.047
+  constrained_cap3 0.061 +/- 0.049
+
+[max_efficacy]
+  efficacy         1.891 +/- 0.694
+  constrained      0.957 +/- 0.666
+  constrained_cap2 0.954 +/- 0.666
+  constrained_cap3 0.954 +/- 0.666
+
+[mean_toxicity]
+  efficacy         0.191 +/- 0.123
+  constrained      0.036 +/- 0.021
+  constrained_cap2 0.030 +/- 0.015
+  constrained_cap3 0.031 +/- 0.016
+
+[concentration]
+  efficacy         0.451 +/- 0.158
+  constrained      0.305 +/- 0.169
+  constrained_cap2 0.246 +/- 0.151
+  constrained_cap3 0.272 +/- 0.154
+
+[robustness]
+  efficacy         0.801 +/- 0.084
+  constrained      0.827 +/- 0.198
+  constrained_cap2 0.731 +/- 0.292
+  constrained_cap3 0.780 +/- 0.235
+
+run dir: res/runs_risk/launch_20260614-224649/shard_11

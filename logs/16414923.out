@@ -1,0 +1,8 @@
+node=braid-st-comp-48xl-11 cpus=16 job=16414923
+ablation: panel='data/processed/depmap/panel_5k.txt' 12 lines x [0 1] seeds, K=30, AL 8x10
+joint multitask GP enabled for learned-safety methods (trunc_pred, ehvi)
+panel subset: 5116 genes (data/processed/depmap/panel_5k.txt)
+contrast-line candidates (best first): ['ACH-001360', 'ACH-000608', 'ACH-000934', 'ACH-002806', 'ACH-000571', 'ACH-000811', 'ACH-001422', 'ACH-001513', 'ACH-001194', 'ACH-003184']
+using contrast line: ACH-001360
+target lines (12): ['ACH-000696', 'ACH-000147', 'ACH-000183', 'ACH-000067', 'ACH-000900', 'ACH-000527', 'ACH-000362', 'ACH-000219', 'ACH-000651', 'ACH-000404', 'ACH-000583', 'ACH-001401']
+[ACH-000696] 5113 genes, 2457 CORUM-annotated

@@ -88,7 +88,7 @@ _A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy"),
                    ("mean_toxicity", "Mean toxicity"), ("n_safe", "# safe (of K)")]
 _A_DIAG_METRICS = [("max_efficacy", "Max efficacy"), ("n_novel", "# novel (of K)"),
                    ("hypervolume", "Hypervolume (eff,−tox)"),
-                   ("pareto_recall", "Pareto recall↑")]
+                   ("pareto_recall_norm", "Pareto recall (norm)↑")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
               ("n_pathways", "Distinct pathways↑"), ("mean_efficacy", "Mean efficacy↑"),
               ("mean_toxicity", "Mean toxicity↓")]
@@ -101,10 +101,18 @@ _B_CORUM_OPS = ["none", "kdpp_corum"]
 _B_STRING_OPS = ["none", "kdpp_string"]
 
 
-def _ci(x):
+def _stat(x, kind="ci"):
+    """(mean, spread). kind='ci' -> 95% CI half-width (1.96*sem); 'std' -> sample std."""
     x = np.asarray(x, float); x = x[~np.isnan(x)]; n = len(x)
     m = float(x.mean()) if n else float("nan")
-    return m, (0.0 if n < 2 else 1.96 * float(x.std(ddof=1)) / np.sqrt(n))
+    if n < 2:
+        return m, 0.0
+    sd = float(x.std(ddof=1))
+    return m, (sd if kind == "std" else 1.96 * sd / np.sqrt(n))
+
+
+def _ci(x):
+    return _stat(x, "ci")
 
 
 def _cell(mn, ci):
@@ -275,12 +283,12 @@ def _gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir):
     return {"agg": agg, "per": per}
 
 
-def _table_A(d, metric_set):
+def _table_A(d, metric_set, kind="ci"):
     methods = [m for m in A_ORDER if m in set(d.method)]
     metrics = [(c, lbl) for c, lbl in metric_set if c in d.columns]
     rows = []
     for m in methods:
-        cells = [_cell(*_ci(d[d.method == m][c])) for c, _ in metrics]
+        cells = [_cell(*_stat(d[d.method == m][c], kind)) for c, _ in metrics]
         rows.append({"m": LABELS.get(m, m), "cells": cells})
     return [lbl for _, lbl in metrics], rows
 
@@ -616,17 +624,25 @@ _FACET_TMPL = """
 <div class="card">{{ final_k|safe }}</div>
 {% endif %}
 <h3>A &middot; Method table (main)</h3>
-<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants.</div>
+<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants. Cells = mean ± 95% CI.</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± std</summary>
+<table><thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in a_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex_std }}</code></pre></details></details></div>
 <h3>A &middot; Diagnostics</h3>
-<div class="note">Secondary / diagnostic quantities — # novel (unassayed) nominees, nominee hypervolume, and Pareto recall.</div>
+<div class="note">Secondary / diagnostic quantities — # novel (unassayed) nominees, nominee hypervolume, and normalized Pareto recall. Cells = mean ± 95% CI.</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex }}</code></pre></details></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex }}</code></pre></details>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± std</summary>
+<table><thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in ad_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex_std }}</code></pre></details></details></div>
 {% if assayed_img %}
 <h3>A &middot; Assayed set — quality of the genes actually measured</h3>
 <div class="note">Per <b>acquisition</b> (not nomination): of the ~120 genes measured during the loop, how many are safe and how toxic the collected data is. Tests whether EHVI / constrained ("+safe") acquisition gathers safer data than greedy.</div>
@@ -713,7 +729,9 @@ _GLOSSARY = """
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>filter · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>filter · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>The known-toxicity filter is the limit the learned rules chase.</i><br><br>
 <b>Filter timing (end-stage vs per-round).</b> The filter can be applied only to the final shortlist (<i>end-stage</i>, <code>nom</code>) or at <i>every acquisition round</i> (<code>RT</code>), restricting each round to genes believed safe — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination remain distinct stages; per-round filtering constrains both.<br><br>
 <b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · STRING</b>: external STRING combined-score network similarity. &bull; <b>k-DPP · CORUM</b>: external CORUM protein-complex (Jaccard co-membership) similarity. None is outcome similarity — the embedding-vs-STRING-vs-CORUM comparison is the similarity-source ablation (learned vs two external knowledge graphs, dense → sparse). Layered on the four safety-aware bases (G·nom·P / G·RT·P / E·nom·P / E·RT·P). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
-<b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).
+<b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).<br><br>
+<b>Pareto recall (normalized).</b> Fraction of the true (efficacy, −toxicity) Pareto front recovered by the K nominees, normalized by min(K, |front|) — the most front genes K picks <i>could</i> recover. Genome-wide the front can be hundreds of genes, so the raw fraction is capped near K/|front|; normalizing makes 1.0 attainable and the score discriminating. Threshold-free (a front gene is non-dominated by definition; no efficacy cutoff).<br><br>
+<b>Spread.</b> Tables show mean ± 95% CI (1.96·sem over lines × seeds); each has a "mean ± std" dropdown with the sample standard deviation instead.
 """
 
 
@@ -732,8 +750,10 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
     for src in tox_sources:
         d = df[df.tox_source == src]
         dA, dB = d[d.analysis == "A"], d[d.analysis == "B"]
-        a_cols, a_rows = _table_A(dA, _A_MAIN_METRICS)
-        ad_cols, ad_rows = _table_A(dA, _A_DIAG_METRICS)
+        a_cols, a_rows = _table_A(dA, _A_MAIN_METRICS, "ci")
+        ad_cols, ad_rows = _table_A(dA, _A_DIAG_METRICS, "ci")
+        _, a_rows_std = _table_A(dA, _A_MAIN_METRICS, "std")
+        _, ad_rows_std = _table_A(dA, _A_DIAG_METRICS, "std")
         b_cols, b_rows = _b_table(dB, _B_CORUM_OPS, _B_METRICS)          # CORUM table
         bs_cols, bs_rows = _b_table(dB, _B_STRING_OPS, _B_STRING_METRICS)  # STRING table
         assayed_img, (asy_cols, asy_rows) = _assayed_panel(assayed, src, fig_dir)
@@ -747,7 +767,14 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             perline=_tradeoff_per_line(dA, src, lines, scatter, tau, tau_mode, fig_dir),
             cloud=_gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir),
             cloudK=meta.get("K", ""), n_lines=df.cell_line.nunique(),
-            a_cols=a_cols, a_rows=a_rows, headline_b=_headline_B(dB),
+            a_cols=a_cols, a_rows=a_rows, a_rows_std=a_rows_std, ad_rows_std=ad_rows_std,
+            a_latex_std=_latex_table("method", a_cols, a_rows_std,
+                                     f"Safety vs efficacy ({src} toxicity), mean $\\pm$ std.",
+                                     f"A_{src}_std"),
+            ad_latex_std=_latex_table("method", ad_cols, ad_rows_std,
+                                      f"Diagnostics ({src} toxicity), mean $\\pm$ std.",
+                                      f"Adiag_{src}_std"),
+            headline_b=_headline_B(dB),
             assayed_img=assayed_img, asy_cols=asy_cols, asy_rows=asy_rows,
             rounds_nom=rounds_nom, rounds_assayed=rounds_assayed,
             filter_timing=_filter_timing_curve(rounds, src, fig_dir),

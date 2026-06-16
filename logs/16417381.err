@@ -1,0 +1,2 @@
+/var/spool/slurmd/job16417381/slurm_script: line 48: 614868 Killed                  python -u scripts/run_ablation.py --embeddings "$EMB" --panel-a "$PANEL_A" --panel-b "$PANEL_B" $JOINT_ARG $EXPORT_ARG --n-cell-lines "$NLINES" --seeds $SEEDS --K "$K" --n-initial "$NINIT" --n-rounds "$ROUNDS" --batch "$BATCH" --tau "$TAU" --out-root res/runs_ablation
+slurmstepd: error: Detected 1 oom_kill event in StepId=16417381.batch. Some of the step tasks have been OOM Killed.

@@ -1,0 +1,33 @@
+cell lines: ['ACH-000696', 'ACH-000219']
+
+=== aggregate over 2 lines x 2 seeds (mean +/- 95%% CI) ===
+
+[selective_lethality]
+  greedy   0.473 +/- 0.188
+  cap1     0.391 +/- 0.087
+  cap2     0.366 +/- 0.092
+  cap3     0.381 +/- 0.098
+  cap5     0.388 +/- 0.152
+
+[concentration]
+  greedy   0.785 +/- 0.278
+  cap1     0.072 +/- 0.019
+  cap2     0.122 +/- 0.030
+  cap3     0.166 +/- 0.031
+  cap5     0.246 +/- 0.024
+
+[robustness]
+  greedy   0.804 +/- 0.148
+  cap1     0.969 +/- 0.015
+  cap2     0.967 +/- 0.016
+  cap3     0.955 +/- 0.022
+  cap5     0.945 +/- 0.026
+
+[n_pathways]
+  greedy   49.500 +/- 75.515
+  cap1     61.750 +/- 25.572
+  cap2     77.500 +/- 57.062
+  cap3     68.750 +/- 61.046
+  cap5     66.750 +/- 65.091
+
+run dir: res/runs_risk/launch_20260614-181514/shard_0

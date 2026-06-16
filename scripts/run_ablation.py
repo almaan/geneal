@@ -55,10 +55,15 @@ def _string_spread(sel, S):
 
 
 def _pareto_recall(sel, eff, tox, pareto_set):
-    """(n hit, recall): how many of the nominees lie on the TRUE (eff,-tox) Pareto
-    front, and the fraction of that front recovered."""
+    """(n hit, recall, recall_norm): how many nominees lie on the TRUE (eff,-tox)
+    Pareto front, the raw fraction of that front recovered, and the fraction of the
+    *recoverable* front -- normalized by min(K,|front|) so K<<|front| (genome-wide,
+    front can be hundreds of genes) doesn't artificially cap the score at K/|front|."""
+    k = len(list(sel)); nf = len(pareto_set)
     hit = len(set(sel) & pareto_set)
-    return hit, (hit / len(pareto_set) if pareto_set else float("nan"))
+    rec = hit / nf if nf else float("nan")
+    rec_norm = hit / min(k, nf) if nf else float("nan")
+    return hit, rec, rec_norm
 
 # Acquisition specs: acq_key -> (kind, acq_safety). acq_safety constrains the
 # per-round candidate pool to believed-safe genes (none/known/pred).
@@ -302,11 +307,12 @@ def main():
                     sel = nominate(h[-1], Xa, effa, toxa, mema, safety=safety,
                                    diversity="none", S=None, **nom_common)
                     m = evaluate(sel, effa, toxa, mema, tox_ceiling=ceil_a)
-                    p_hit, p_rec = _pareto_recall(sel, effa, toxa, pareto_a)
+                    p_hit, p_rec, p_recn = _pareto_recall(sel, effa, toxa, pareto_a)
                     rows.append(dict(analysis="A", tox_source=src, method=label, base=label,
                                      operator="none", acq=acq_key, safety=safety, cell_line=cl,
                                      seed=seed, n_novel=len(set(sel) - set(h[-1])),
-                                     pareto_hit=p_hit, pareto_recall=p_rec, **m))
+                                     pareto_hit=p_hit, pareto_recall=p_rec,
+                                     pareto_recall_norm=p_recn, **m))
                     if want_scatter:
                         picks[label] = set(sel)
                 if want_scatter:
@@ -340,14 +346,15 @@ def main():
                                        diversity=mode, S=Sb, **nom_common)
                         m = evaluate(sel, effb, toxb, memb, tox_ceiling=ceil_b)
                         dc = dropout_curve(sel, memb, effb, MAX_DROP)
-                        p_hit, p_rec = _pareto_recall(sel, effb, toxb, pareto_b)
+                        p_hit, p_rec, p_recn = _pareto_recall(sel, effb, toxb, pareto_b)
                         sm = _string_spread(sel, S_by_src["string"])   # STRING pairwise spread
                         rows.append(dict(analysis="B", tox_source=src,
                                          method=f"{base_label}+{op_label}", base=base_label,
                                          operator=op_label, acq=acq_key, safety=safety,
                                          cell_line=cl, seed=seed,
                                          n_novel=len(set(sel) - set(rev_final)),
-                                         pareto_hit=p_hit, pareto_recall=p_rec, **m, **sm,
+                                         pareto_hit=p_hit, pareto_recall=p_rec,
+                                         pareto_recall_norm=p_recn, **m, **sm,
                                          **{f"drop_{i}": dc[i] for i in range(len(dc))}))
         print(f"[{cl}] done ({len(args.seeds)} seeds x {len(TOX_SOURCES)} tox-sources)")
 
