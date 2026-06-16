@@ -22,6 +22,22 @@ def pareto_front(P: np.ndarray) -> list[int]:
     return keep
 
 
+def pareto_indices(P: np.ndarray) -> np.ndarray:
+    """Indices of the non-dominated rows (maximize both columns), O(n log n).
+    Sort by col0 desc (ties col1 desc), sweep keeping the running max of col1;
+    a point is non-dominated iff its col1 exceeds every earlier (higher-col0) one."""
+    P = np.asarray(P, float)
+    n = len(P)
+    if n == 0:
+        return np.array([], dtype=int)
+    order = np.lexsort((-P[:, 1], -P[:, 0]))   # primary: col0 desc; secondary: col1 desc
+    keep, best_y = [], -np.inf
+    for i in order:
+        if P[i, 1] > best_y:
+            keep.append(i); best_y = P[i, 1]
+    return np.array(keep, dtype=int)
+
+
 def hypervolume2d(P: np.ndarray, ref: np.ndarray) -> float:
     """Dominated hypervolume (area) of point set P above reference ref (maximize
     both). Only non-dominated points above ref contribute."""

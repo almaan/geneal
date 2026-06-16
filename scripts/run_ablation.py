@@ -39,6 +39,14 @@ from geneal.runner.ablation import (run_acquisition, nominate, evaluate,
                                     build_string_S, build_embedding_S, build_corum_S,
                                     _tox_threshold)
 from geneal.metrics.portfolio import dropout_curve
+from geneal.models.multiobjective import pareto_indices
+
+
+def _pareto_recall(sel, eff, tox, pareto_set):
+    """(n hit, recall): how many of the nominees lie on the TRUE (eff,-tox) Pareto
+    front, and the fraction of that front recovered."""
+    hit = len(set(sel) & pareto_set)
+    return hit, (hit / len(pareto_set) if pareto_set else float("nan"))
 
 # Acquisition specs: acq_key -> (kind, acq_safety). acq_safety constrains the
 # per-round candidate pool to believed-safe genes (none/known/pred).
@@ -74,11 +82,14 @@ ANALYSIS_A = [
     ("cluster",      "cluster",     "none"),
     ("info_div",     "info_div",    "none"),
 ]
-# Analysis B bases: (label, acq_key, nominate_safety); each x {none,cap,kdpp}.
+# Analysis B bases (aligned with Section-A method keys): greedy vs EHVI, each with
+# nomination filtering and per-round filtering (all predicted-tox). Diversity
+# operators are layered on each. (base_key, acq_key, nominate_safety).
 B_BASES = [
-    ("greedy",      "greedy",    "none"),
-    ("truncation",  "greedy",    "known"),
-    ("ehvi_trunc",  "ehvi",      "pred"),
+    ("trunc_pred",  "greedy",      "pred"),   # G·nom·P  (greedy + nomination filter)
+    ("greedy_safe", "greedy_safe", "pred"),   # G·RT·P   (greedy + per-round filter)
+    ("ehvi_trunc",  "ehvi",        "pred"),   # E·nom·P  (EHVI + nomination filter)
+    ("ehvi_safe",   "ehvi_safe",   "pred"),   # E·RT·P   (EHVI + per-round filter)
 ]
 # Section-B diversity operators. (op_label, mode, similarity-source).
 # kdpp splits by the k-DPP similarity S: learned embedding cosine vs external
@@ -241,6 +252,8 @@ def main():
                      for k in _TOX_INDEP_ACQ}
             for src in TOX_SOURCES:
                 toxa = toxa_by_src[src]; ceil_a = _tox_threshold(toxa, args.tau, args.tau_mode)
+                pareto_a = set(int(i) for i in pareto_indices(
+                    np.column_stack([effa, -toxa])))   # true genome-wide Pareto front
                 for k in _TOX_DEP_ACQ:
                     kind, acqsaf = ACQ_SPECS[k]
                     histA[k] = run_acquisition(kind, Xa, effa, toxa, seed=seed,
@@ -271,9 +284,11 @@ def main():
                     sel = nominate(h[-1], Xa, effa, toxa, mema, safety=safety,
                                    diversity="none", S=None, **nom_common)
                     m = evaluate(sel, effa, toxa, mema, tox_ceiling=ceil_a)
+                    p_hit, p_rec = _pareto_recall(sel, effa, toxa, pareto_a)
                     rows.append(dict(analysis="A", tox_source=src, method=label, base=label,
                                      operator="none", acq=acq_key, safety=safety, cell_line=cl,
-                                     seed=seed, n_novel=len(set(sel) - set(h[-1])), **m))
+                                     seed=seed, n_novel=len(set(sel) - set(h[-1])),
+                                     pareto_hit=p_hit, pareto_recall=p_rec, **m))
                     if want_scatter:
                         picks[label] = set(sel)
                 if want_scatter:
@@ -284,17 +299,21 @@ def main():
                     scatters.append(sc)
 
             # ===================== Analysis B (subset pool) =====================
-            histB = {"greedy": run_acquisition("greedy", Xb, effb, None, seed=seed,
-                                               score=args.acq_score, return_history=True,
-                                               **common)[1]} if "greedy" in B_ACQ else {}
+            # tox-independent B acquisitions (run once)
+            histB = {k: run_acquisition(k, Xb, effb, None, seed=seed, score=args.acq_score,
+                                        return_history=True, **common)[1]
+                     for k in B_ACQ if ACQ_SPECS[k][1] == "none" and k != "ehvi"}
             for src in TOX_SOURCES:
                 toxb = toxb_by_src[src]; ceil_b = _tox_threshold(toxb, args.tau, args.tau_mode)
-                if "ehvi" in B_ACQ:
-                    histB["ehvi"] = run_acquisition("ehvi", Xb, effb, toxb, seed=seed,
-                                                    ehvi_samples=args.ehvi_samples,
-                                                    shortlist=args.shortlist, score=args.acq_score,
-                                                    joint_factory=joint_factory,
-                                                    return_history=True, **common)[1]
+                pareto_b = set(int(i) for i in pareto_indices(np.column_stack([effb, -toxb])))
+                for k in [a for a in B_ACQ if a not in histB]:    # tox-dependent B acqs
+                    kind, acqsaf = ACQ_SPECS[k]
+                    histB[k] = run_acquisition(kind, Xb, effb, toxb, seed=seed,
+                                               ehvi_samples=args.ehvi_samples,
+                                               shortlist=args.shortlist, score=args.acq_score,
+                                               joint_factory=joint_factory, acq_safety=acqsaf,
+                                               tau=args.tau, tau_mode=args.tau_mode,
+                                               return_history=True, **common)[1]
                 for base_label, acq_key, safety in B_BASES:
                     for op_label, mode, simsrc in DIVERSITY_OPS:
                         Sb = S_by_src.get(simsrc) if simsrc else None
@@ -303,11 +322,13 @@ def main():
                                        diversity=mode, S=Sb, **nom_common)
                         m = evaluate(sel, effb, toxb, memb, tox_ceiling=ceil_b)
                         dc = dropout_curve(sel, memb, effb, MAX_DROP)
+                        p_hit, p_rec = _pareto_recall(sel, effb, toxb, pareto_b)
                         rows.append(dict(analysis="B", tox_source=src,
                                          method=f"{base_label}+{op_label}", base=base_label,
                                          operator=op_label, acq=acq_key, safety=safety,
                                          cell_line=cl, seed=seed,
-                                         n_novel=len(set(sel) - set(rev_final)), **m,
+                                         n_novel=len(set(sel) - set(rev_final)),
+                                         pareto_hit=p_hit, pareto_recall=p_rec, **m,
                                          **{f"drop_{i}": dc[i] for i in range(len(dc))}))
         print(f"[{cl}] done ({len(args.seeds)} seeds x {len(TOX_SOURCES)} tox-sources)")
 

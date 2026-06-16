@@ -69,19 +69,24 @@ OP_ORDER = ["none", "cap", "kdpp_emb", "kdpp_corum"]
 OP_LABELS = {"none": "none", "cap": "cap (CORUM)", "kdpp_emb": "k-DPP · embedding",
              "kdpp_corum": "k-DPP · CORUM"}
 OP_SHORT = {"none": "none", "cap": "cap", "kdpp_emb": "kdpp·emb", "kdpp_corum": "kdpp·CORUM"}
-B_BASE_SHORT = {"greedy": "greedy", "truncation": "filter·K", "ehvi_trunc": "E·nom·P"}
 OP_MARK = {"none": "o", "cap": "s", "kdpp_emb": "D", "kdpp_corum": "^"}
 OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77", "kdpp_corum": "#e0a32e"}
-B_BASE_ORDER = ["greedy", "truncation", "ehvi_trunc"]
-B_BASE_COLOR = {"greedy": "#d1495b", "truncation": "#2e6f95", "ehvi_trunc": "#1b9e77"}
+# B bases = the 4 safety-aware Section-A methods (keys), displayed with A's labels.
+B_BASE_ORDER = ["trunc_pred", "greedy_safe", "ehvi_trunc", "ehvi_safe"]
+B_BASE_COLOR = {"trunc_pred": "#2e6f95", "greedy_safe": "#7eb6d9",
+                "ehvi_trunc": "#1b9e77", "ehvi_safe": "#13634a"}
+B_BASE_SHORT = {"trunc_pred": "G·nom·P", "greedy_safe": "G·RT·P",
+                "ehvi_trunc": "E·nom·P", "ehvi_safe": "E·RT·P"}
 
 _A_METRICS = [("mean_efficacy", "Mean efficacy"),
               ("mean_efficacy_safe", "Mean efficacy (permissible)"),
               ("max_efficacy", "Max efficacy"), ("mean_toxicity", "Mean toxicity"),
               ("n_safe", "# safe (of K)"), ("n_novel", "# novel (of K)"),
-              ("hypervolume", "Hypervolume (eff,−tox)")]
+              ("hypervolume", "Hypervolume (eff,−tox)"),
+              ("pareto_recall", "Pareto recall↑")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
-              ("n_pathways", "Distinct pathways↑"), ("mean_efficacy", "Mean efficacy↑")]
+              ("n_pathways", "Distinct pathways↑"), ("mean_efficacy", "Mean efficacy↑"),
+              ("mean_toxicity", "Mean toxicity↓")]
 
 
 def _ci(x):
@@ -414,7 +419,8 @@ def _b_table(d):
             if not len(g):
                 continue
             cells = [_cell(*_ci(g[c])) for c, _ in _B_METRICS]
-            rows.append({"label": f"{base} + {OP_LABELS.get(op, op)}", "cells": cells})
+            rows.append({"label": f"{B_BASE_SHORT.get(base, base)} + {OP_LABELS.get(op, op)}",
+                         "cells": cells})
     return cols, rows
 
 
@@ -453,7 +459,8 @@ def _b_eff_conc(d, src, fig_dir):
                        color=B_BASE_COLOR.get(b, "#444"), edgecolors="white", linewidths=1, zorder=3)
             ax.annotate(OP_SHORT.get(op, op), (xc, yc), fontsize=7, xytext=(0, 6),
                         textcoords="offset points", ha="center")
-        ax.plot(xs, ys, ls=":", lw=1.2, color=B_BASE_COLOR.get(b, "#444"), label=b, zorder=2)
+        ax.plot(xs, ys, ls=":", lw=1.2, color=B_BASE_COLOR.get(b, "#444"),
+                label=B_BASE_SHORT.get(b, b), zorder=2)
     _despine(ax)
     ax.set_xlabel("pathway concentration  (← better hedged)")
     ax.set_ylabel("mean efficacy  (↑ more potent)")
@@ -508,7 +515,7 @@ def _failure_curve(dB, src, fig_dir):
     _despine(ax)
     ax.set_xlabel("# most-valuable pathways eliminated")
     ax.set_ylabel("portfolio value retained")
-    ax.set_title(f"base = {base}", fontsize=10)
+    ax.set_title(f"base = {B_BASE_SHORT.get(base, base)}", fontsize=10)
     ax.legend(frameon=False, fontsize=8)
     fig.tight_layout()
     return _emit(fig, fig_dir, f"failure_sim_{src}")
@@ -544,7 +551,7 @@ def _headline_B(d):
             if len(g) and _ci(g["concentration"])[0] < best_c:
                 best_op, best_c, best_e = op, _ci(g["concentration"])[0], _ci(g["mean_efficacy"])[0]
         if best_op != "none":
-            bits.append(f"<b>{base}</b>: {OP_LABELS.get(best_op, best_op)} cuts concentration "
+            bits.append(f"<b>{B_BASE_SHORT.get(base, base)}</b>: {OP_LABELS.get(best_op, best_op)} cuts concentration "
                         f"{c0:.0%}→{best_c:.0%} (efficacy {e0:.2f}→{best_e:.2f})")
     return ("Diversity operators de-concentrate the portfolio — " + "; ".join(bits) + "."
             ) if bits else "Diversity operators applied per base."
