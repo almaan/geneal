@@ -63,9 +63,10 @@ ANALYSIS_A = [
     ("trunc_known",  "greedy",      "known"),  # known ceiling at NOMINATION (oracle limit)
     ("trunc_pred",   "greedy",      "pred"),   # learned ceiling at nomination
     ("greedy_safe",  "greedy_safe", "pred"),   # + truncate-each-round (predicted)
-    ("ehvi",         "ehvi",        "none"),   # BASELINE: EHVI acq, NO truncation
-    ("ehvi_trunc",   "ehvi",        "pred"),   # EHVI acq + nomination truncation
-    ("ehvi_safe",    "ehvi_safe",   "pred"),   # EHVI + truncate-each-round (predicted)
+    ("ehvi",         "ehvi",        "none"),   # BASELINE: EHVI acq, NO filter (max-eff nomination)
+    ("ehvi_pareto",  "ehvi",        "pareto"), # EHVI acq, nominate the predicted Pareto front (balanced)
+    ("ehvi_trunc",   "ehvi",        "pred"),   # EHVI acq + nomination filter
+    ("ehvi_safe",    "ehvi_safe",   "pred"),   # EHVI + per-round filter (predicted)
     ("known_safe",   "known_safe",  "known"),  # KNOWN truncation throughout (upper bound)
     ("random",       "random",      "none"),
     ("farthest",     "farthest",    "none"),

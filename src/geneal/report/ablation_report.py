@@ -41,6 +41,7 @@ COLORS = {
     "greedy": "#d1495b", "trunc_known": "#2e6f95", "trunc_pred": "#7eb6d9",
     "ehvi": "#9aa0a6", "ehvi_trunc": "#1b9e77", "random": "#b0b6bd",
     "farthest": "#8e6fb0", "cluster": "#e0a32e", "info_div": "#c2548a",
+    "ehvi_pareto": "#0e7c66",
 }
 # Compact labels (used in figures AND tables; the grammar is spelled out in the
 # glossary). G=greedy acq, E=EHVI acq; nom=nomination-only truncation, RT=per-round
@@ -48,13 +49,13 @@ COLORS = {
 LABELS = {
     "greedy": "greedy", "trunc_known": "G·nom·K", "trunc_pred": "G·nom·P",
     "greedy_safe": "G·RT·P", "known_safe": "G·RT·K (upper bd)",
-    "ehvi": "EHVI", "ehvi_trunc": "E·nom·P", "ehvi_safe": "E·RT·P",
-    "random": "random", "farthest": "farthest", "cluster": "cluster",
-    "info_div": "info-div",
+    "ehvi": "EHVI", "ehvi_pareto": "EHVI·Pareto", "ehvi_trunc": "E·nom·P",
+    "ehvi_safe": "E·RT·P", "random": "random", "farthest": "farthest",
+    "cluster": "cluster", "info_div": "info-div",
 }
 # grouped by regime so one table serves both discussions:
 # no-filter (no-threshold regime) first, then filtered (threshold regime).
-A_ORDER = ["greedy", "ehvi", "random", "farthest", "cluster", "info_div",
+A_ORDER = ["greedy", "ehvi", "ehvi_pareto", "random", "farthest", "cluster", "info_div",
            "trunc_known", "known_safe", "trunc_pred", "greedy_safe", "ehvi_trunc", "ehvi_safe"]
 COLORS.update({"greedy_safe": "#b23a55", "ehvi_safe": "#11806080", "known_safe": "#0b3d91"})
 # acquisitions (for the assayed-set panel + per-round curves)
@@ -77,7 +78,8 @@ B_BASE_COLOR = {"greedy": "#d1495b", "truncation": "#2e6f95", "ehvi_trunc": "#1b
 _A_METRICS = [("mean_efficacy", "Mean efficacy"),
               ("mean_efficacy_safe", "Mean efficacy (permissible)"),
               ("max_efficacy", "Max efficacy"), ("mean_toxicity", "Mean toxicity"),
-              ("n_safe", "# safe (of K)"), ("n_novel", "# novel (of K)")]
+              ("n_safe", "# safe (of K)"), ("n_novel", "# novel (of K)"),
+              ("hypervolume", "Hypervolume (eff,−tox)")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
               ("n_pathways", "Distinct pathways↑"), ("alpha_ndcg", "α-NDCG↑"),
               ("mean_efficacy", "Mean efficacy↑")]

@@ -159,6 +159,17 @@ def test_joint_gp_nominate_and_acquire():
     assert len(sel) == 6 and len(set(sel)) == 6
 
 
+def test_pareto_nomination_and_hypervolume():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="pareto",
+                   diversity="none", tau=0.5, surr_factory=_factory)
+    assert len(sel) == 6 and len(set(sel)) == 6
+    # evaluate returns a finite hypervolume
+    m = evaluate(sel, eff, tox, membership, X, tox_ceiling=0.5)
+    assert "hypervolume" in m and np.isfinite(m["hypervolume"]) and m["hypervolume"] >= 0
+
+
 def test_build_corum_S_jaccard():
     # genes 0,1 share complex A; gene 2 in B; gene 3 unannotated
     membership = {0: {"A"}, 1: {"A"}, 2: {"B"}, 3: set()}

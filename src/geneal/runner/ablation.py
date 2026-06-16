@@ -181,6 +181,31 @@ def run_acquisition(kind, X, eff, tox, n_init, n_rounds, batch, seed,
 _DIV_MODE = {"none": "greedy", "cap": "cap", "kdpp": "dpp"}
 
 
+def _pareto_select(m_eff, m_tox, K, pool=200):
+    """Nominate K genes that best cover the predicted (efficacy, -toxicity) Pareto
+    front: greedily add the gene with the largest marginal hypervolume gain. Gives
+    a BALANCED set spread along the frontier (high-efficacy/high-tox ... low-eff/
+    low-tox) rather than max-efficacy. Restricted to a quality pool for speed."""
+    from geneal.models.multiobjective import hypervolume2d
+    m_eff = np.asarray(m_eff, float); m_tox = np.asarray(m_tox, float)
+    n = len(m_eff)
+    score = m_eff - m_tox                          # optimistic balance, for the pool
+    order = np.argsort(score)[::-1][:min(pool, n)]
+    P = np.column_stack([m_eff[order], -m_tox[order]])
+    ref = np.array([P[:, 0].min() - 1e-6, P[:, 1].min() - 1e-6])
+    chosen, cur = [], np.empty((0, 2))
+    for _ in range(min(K, len(order))):
+        best, best_hv = -1, -np.inf
+        for i in range(len(order)):
+            if i in chosen:
+                continue
+            hv = hypervolume2d(np.vstack([cur, P[i]]), ref)
+            if hv > best_hv:
+                best_hv, best = hv, i
+        chosen.append(best); cur = np.vstack([cur, P[best]])
+    return [int(order[i]) for i in chosen]
+
+
 def _tox_threshold(tox_values, tau, tau_mode):
     """Toxicity ceiling. 'absolute' (default, biological): tau is a toxicity value
     on the Chronos scale -- e.g. tau=0.5 keeps genes with toxicity < 0.5, i.e.
@@ -211,6 +236,18 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
     X = np.asarray(X, float)
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
     n = len(eff)
+
+    if safety == "pareto":
+        # nominate the predicted (efficacy, -toxicity) Pareto front (balanced),
+        # NOT max-efficacy. No tau filter; this is the no-threshold nomination.
+        if joint_factory is not None:
+            m2 = np.asarray(joint_factory().fit(
+                X[revealed], np.column_stack([eff[revealed], tox[revealed]])).predict(X)[0])
+            m_eff, m_tox = m2[:, 0], m2[:, 1]
+        else:
+            m_eff = np.asarray(surr_factory().fit(X[revealed], eff[revealed]).predict(X)[0])
+            m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0])
+        return _pareto_select(m_eff, m_tox, K, pool)
 
     if safety == "pred" and joint_factory is not None:
         # joint (multitask) GP: efficacy + toxicity share strength. q (efficacy)
@@ -278,6 +315,13 @@ def evaluate(pick, eff, tox, membership, X, tox_ceiling=None):
         out["n_safe"] = int(np.sum(safe))
         # mean efficacy among PERMISSIBLE picks (below the safety ceiling)
         out["mean_efficacy_safe"] = float(np.mean(eff[pe[safe]])) if safe.any() else float("nan")
+    # nominee hypervolume in TRUE (efficacy, -toxicity) space vs a global reference
+    # (efficacy/safety BALANCE -- the right readout when there is no hard threshold).
+    from geneal.models.multiobjective import hypervolume2d
+    ref = np.array([eff.min() - 0.1 * (np.ptp(eff) + 1e-9),
+                    -(tox.max()) - 0.1 * (np.ptp(tox) + 1e-9)])
+    out["hypervolume"] = float(hypervolume2d(
+        np.column_stack([eff[pick], -tox[pick]]), ref))
     return out
 
 
