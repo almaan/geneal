@@ -172,6 +172,8 @@ def main():
                     help="explicit target ModelIDs (overrides --n-cell-lines)")
     ap.add_argument("--out-root", default="res/runs_ablation")
     ap.add_argument("--run-name", default=None)
+    ap.add_argument("--no-report", action="store_true",
+                    help="skip the HTML report build (for sharded runs aggregated later)")
     ap.add_argument("--export-figs", action="store_true",
                     help="also write vector PDF+PNG of every figure (kaleido). OFF by "
                          "default -- it is slow (per-figure chromium) and would stall the "
@@ -384,14 +386,15 @@ def main():
                 e, _ = _mean_ci(sub["mean_efficacy"])
                 print(f"  {base_label:11s}+{op_label:11s} conc {c:.3f} robust {r:.3f} eff {e:.3f}")
 
-    try:
-        from geneal.report.ablation_report import build_ablation_report
-        build_ablation_report(df, out / "report.html", scatter=scatter_df, meta=meta,
-                              assayed=assayed_df, rounds=rounds_df,
-                              fig_dir=(out / "figs") if args.export_figs else None)
-        print(f"\nreport -> {out / 'report.html'}")
-    except Exception as e:
-        import traceback; traceback.print_exc(); print("report skipped:", e)
+    if not args.no_report:
+        try:
+            from geneal.report.ablation_report import build_ablation_report
+            build_ablation_report(df, out / "report.html", scatter=scatter_df, meta=meta,
+                                  assayed=assayed_df, rounds=rounds_df,
+                                  fig_dir=(out / "figs") if args.export_figs else None)
+            print(f"\nreport -> {out / 'report.html'}")
+        except Exception as e:
+            import traceback; traceback.print_exc(); print("report skipped:", e)
     print(f"run dir: {out}")
 
 
