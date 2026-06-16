@@ -308,6 +308,39 @@ def _final_k_bars(dA, src, fig_dir):
     return _emit(fig, fig_dir, f"final_k_{src}")
 
 
+def _admission_curve(scatter, src, tau, tau_mode, fig_dir):
+    """For the NON-filtered methods: fraction of their K nominees that would pass
+    at each hypothetical safety threshold τ (the empirical CDF of nominee
+    toxicity, pooled over lines). Shows how badly unconstrained methods fare
+    against a range of safety bars. Dashed line = the τ used in the main results."""
+    if scatter is None or scatter.empty:
+        return None
+    d = scatter[scatter.tox_source == src] if "tox_source" in scatter.columns else scatter
+    if d.empty:
+        return None
+    nofilter = ["greedy", "ehvi", "ehvi_pareto", "random", "farthest", "cluster", "info_div"]
+    methods = [m for m in nofilter if f"pick_{m}" in d.columns]
+    if not methods:
+        return None
+    tox_all = d["toxicity"].to_numpy()
+    grid = np.linspace(float(np.nanmin(tox_all)), float(np.nanquantile(tox_all, 0.99)), 80)
+    fig, ax = plt.subplots(figsize=(6.8, 4.4))
+    for m in methods:
+        t = d.loc[d[f"pick_{m}"].astype(bool), "toxicity"].to_numpy()
+        if not len(t):
+            continue
+        ax.plot(grid, [np.mean(t <= g) for g in grid], "-", lw=1.7,
+                color=COLORS.get(m, "#888"), label=LABELS.get(m, m))
+    if tau_mode == "absolute":
+        ax.axvline(tau, ls="--", lw=1.1, color="#6b7280")
+        ax.text(tau, 1.0, f" τ={tau:g} (main)", color="#6b7280", fontsize=8, va="top")
+    _despine(ax)
+    ax.set_xlabel("safety threshold τ  (toxicity ceiling)")
+    ax.set_ylabel("fraction of K nominees admitted (tox ≤ τ)")
+    ax.set_ylim(-0.02, 1.02); ax.legend(frameon=False, fontsize=8, loc="lower right")
+    return _emit(fig, fig_dir, f"admission_{src}")
+
+
 def _assayed_panel(assayed, src, fig_dir):
     """Per-ACQUISITION quality of the assayed set (the ~120 genes actually
     measured): #lethal-&-safe of the assayed, mean toxicity. Shows whether
@@ -529,6 +562,11 @@ _FACET_TMPL = """
 <div class="note">For each method, how many of the K nominees have TRUE toxicity below (permissible) vs above the τ ceiling. The naive/diversity baselines nominate many over-threshold (toxic) targets; the safety rules keep them permissible.</div>
 <div class="card">{{ safety_bar|safe }}</div>
 {% endif %}
+{% if admission %}
+<h3>A &middot; Admission curve — non-filtered methods vs the safety threshold</h3>
+<div class="note">For the methods with no safety filter: the fraction of their K nominees that would pass at each hypothetical threshold τ (empirical CDF of nominee toxicity, pooled over lines). Curves that stay low until high τ are nominating toxic targets. Dashed line = the τ used in the main results.</div>
+<div class="card">{{ admission|safe }}</div>
+{% endif %}
 {% if perline %}
 <h3>A &middot; Per-cell-line tradeoff</h3>
 <div class="note">One panel per cell line; the same methods; each with its own τ ceiling. The safety ordering holds across lines.</div>
@@ -659,6 +697,7 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             src=src, primary=" (primary)" if src == "contrast" else "", tau=tau,
             tradeoff=_tradeoff_points(dA, src, scatter, tau, tau_mode, fig_dir),
             safety_bar=_safety_bar(dA, src, fig_dir),
+            admission=_admission_curve(scatter, src, tau, tau_mode, fig_dir),
             final_k=_final_k_bars(dA, src, fig_dir),
             perline=_tradeoff_per_line(dA, src, lines, scatter, tau, tau_mode, fig_dir),
             cloud=_gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir),
