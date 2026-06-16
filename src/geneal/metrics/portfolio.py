@@ -59,3 +59,30 @@ def dropout_robustness(sel: Sequence[int], membership: dict,
         return 1.0  # nothing annotated -> nothing to drop
     lost_fracs = [v / total for v in present.values()]
     return 1.0 - float(np.mean(lost_fracs))
+
+
+def dropout_curve(sel, membership, value, max_drop: int = 5):
+    """Worst-case value-of-diversity curve: fraction of portfolio VALUE retained
+    when the d most-valuable pathways fail (d = 0..max_drop). A gene's value is
+    split across the complexes it belongs to; unannotated genes always survive.
+    A diversified portfolio loses less when its top pathways drop. Returns a list
+    of length max_drop+1, retained[0]=1.0, monotone non-increasing."""
+    sel = list(sel)
+    v = np.clip(np.asarray(value, dtype=float), 0.0, None)
+    total = float(v[sel].sum())
+    if total <= 0:
+        return [1.0] + [0.0] * max_drop
+    pathval: dict = {}
+    for g in sel:
+        ps = membership.get(g, set())
+        if not ps:
+            continue
+        for p in ps:
+            pathval[p] = pathval.get(p, 0.0) + float(v[g]) / len(ps)
+    ranked = sorted(pathval.values(), reverse=True)
+    retained, lost = [1.0], 0.0
+    for d in range(1, max_drop + 1):
+        if d <= len(ranked):
+            lost += ranked[d - 1]
+        retained.append(max(0.0, (total - lost) / total))
+    return retained

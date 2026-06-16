@@ -63,7 +63,11 @@ ACQ_LABELS = {"random": "random", "greedy": "greedy/UCB", "farthest": "farthest"
               "cluster": "cluster", "info_div": "info-diverse", "ehvi": "EHVI",
               "greedy_safe": "greedy+safe", "ehvi_safe": "EHVI+safe",
               "known_safe": "known-safe (upper bd)"}
-OP_ORDER = ["none", "cap", "kdpp"]
+OP_ORDER = ["none", "cap", "kdpp_emb", "kdpp_corum"]
+OP_LABELS = {"none": "none", "cap": "cap (CORUM)", "kdpp_emb": "k-DPP · embedding",
+             "kdpp_corum": "k-DPP · CORUM"}
+OP_MARK = {"none": "o", "cap": "s", "kdpp_emb": "D", "kdpp_corum": "^"}
+OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77", "kdpp_corum": "#e0a32e"}
 B_BASE_ORDER = ["greedy", "truncation", "ehvi_trunc"]
 B_BASE_COLOR = {"greedy": "#d1495b", "truncation": "#2e6f95", "ehvi_trunc": "#1b9e77"}
 
@@ -392,8 +396,7 @@ def _b_bar(d, src, fig_dir):
 
 def _b_eff_conc(d, src, fig_dir):
     bases = [b for b in B_BASE_ORDER if b in set(d.base)]
-    marker = {"none": "o", "cap": "s", "kdpp": "D"}
-    fig, ax = plt.subplots(figsize=(6.4, 4.6))
+    fig, ax = plt.subplots(figsize=(6.8, 4.8))
     for b in bases:
         xs, ys = [], []
         for op in OP_ORDER:
@@ -402,9 +405,10 @@ def _b_eff_conc(d, src, fig_dir):
                 continue
             xc, yc = _ci(g["concentration"])[0], _ci(g["mean_efficacy"])[0]
             xs.append(xc); ys.append(yc)
-            ax.scatter(xc, yc, s=70, marker=marker.get(op, "o"),
+            ax.scatter(xc, yc, s=72, marker=OP_MARK.get(op, "o"),
                        color=B_BASE_COLOR.get(b, "#444"), edgecolors="white", linewidths=1, zorder=3)
-            ax.annotate(op, (xc, yc), fontsize=8, xytext=(0, 6), textcoords="offset points", ha="center")
+            ax.annotate(OP_LABELS.get(op, op), (xc, yc), fontsize=7, xytext=(0, 6),
+                        textcoords="offset points", ha="center")
         ax.plot(xs, ys, ls=":", lw=1.2, color=B_BASE_COLOR.get(b, "#444"), label=b, zorder=2)
     _despine(ax)
     ax.set_xlabel("pathway concentration  (← better hedged)")
@@ -412,6 +416,34 @@ def _b_eff_conc(d, src, fig_dir):
     ax.legend(frameon=False, fontsize=9, title="base")
     fig.tight_layout()
     return _emit(fig, fig_dir, f"eff_vs_conc_{src}")
+
+
+def _failure_curve(dB, src, fig_dir):
+    """Value-of-diversity: portfolio value retained as the d most-valuable
+    pathways fail, one line per operator (on a representative base). Diversified
+    portfolios (cap/kdpp) should sit above the concentrated 'none'."""
+    dropcols = sorted([c for c in dB.columns if c.startswith("drop_")],
+                      key=lambda c: int(c.split("_")[1]))
+    if not dropcols:
+        return None
+    base = "ehvi_trunc" if "ehvi_trunc" in set(dB.base) else sorted(set(dB.base))[0]
+    d = dB[dB.base == base]
+    xs = list(range(len(dropcols)))
+    fig, ax = plt.subplots(figsize=(6.2, 4.4))
+    for op in OP_ORDER:
+        g = d[d.operator == op]
+        if not len(g):
+            continue
+        ys = [g[c].mean() for c in dropcols]
+        ax.plot(xs, ys, "-o", ms=4, lw=1.6, color=OP_COLOR.get(op, "#888"),
+                label=OP_LABELS.get(op, op))
+    _despine(ax)
+    ax.set_xlabel("# most-valuable pathways eliminated")
+    ax.set_ylabel("portfolio value retained")
+    ax.set_title(f"base = {base}", fontsize=10)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"failure_sim_{src}")
 
 
 # ---- headlines ---------------------------------------------------------------
@@ -439,12 +471,12 @@ def _headline_B(d):
             continue
         c0, e0 = _ci(g0["concentration"])[0], _ci(g0["mean_efficacy"])[0]
         best_op, best_c, best_e = "none", c0, e0
-        for op in ("cap", "kdpp"):
+        for op in ("cap", "kdpp_emb", "kdpp_corum"):
             g = d[(d.base == base) & (d.operator == op)]
             if len(g) and _ci(g["concentration"])[0] < best_c:
                 best_op, best_c, best_e = op, _ci(g["concentration"])[0], _ci(g["mean_efficacy"])[0]
         if best_op != "none":
-            bits.append(f"<b>{base}</b>: {best_op} cuts concentration "
+            bits.append(f"<b>{base}</b>: {OP_LABELS.get(best_op, best_op)} cuts concentration "
                         f"{c0:.0%}→{best_c:.0%} (efficacy {e0:.2f}→{best_e:.2f})")
     return ("Diversity operators de-concentrate the portfolio — " + "; ".join(bits) + "."
             ) if bits else "Diversity operators applied per base."
@@ -512,8 +544,13 @@ _FACET_TMPL = """
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex }}</code></pre></details></div>
 <div class="card">{{ b_bar|safe }}</div>
 <h3>B &middot; Efficacy vs concentration</h3>
-<div class="note">Each line a base; markers are operators none→cap→kdpp. Left = better hedged; high = efficacy retained.</div>
+<div class="note">Each line a base; markers are operators (none / cap / k-DPP·embedding / k-DPP·CORUM). Left = better hedged; high = efficacy retained. The k-DPP·embedding vs k-DPP·CORUM gap is the similarity-source ablation (learned vs external knowledge).</div>
 <div class="card">{{ b_eff_conc|safe }}</div>
+{% if failure_sim %}
+<h3>B &middot; Value of diversity — pathway-failure simulation</h3>
+<div class="note">Portfolio value retained as the most-valuable pathways are eliminated one by one (a pathway proving non-viable). A diversified shortlist (cap / k-DPP) loses less than the concentrated baseline.</div>
+<div class="card">{{ failure_sim|safe }}</div>
+{% endif %}
 """
 
 _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
@@ -553,7 +590,7 @@ _GLOSSARY = """
 <b>Safety rules (Analysis A).</b>
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>truncation · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>truncation · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>trunc_known is the limit the learned rules chase.</i><br><br>
 <b>Constrained acquisition ("+ per-round trunc").</b> The methods above truncate only at nomination. The <b>greedy + per-round trunc</b> / <b>EHVI + per-round trunc</b> / <b>known trunc throughout</b> variants additionally restrict <i>each acquisition round</i> to genes believed safe (predicted, or known for the upper bound) — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination are still distinct stages; this constrains both.<br><br>
-<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>cap</b>: ≤ c per CORUM pathway. &bull; <b>kdpp</b>: quality-weighted k-DPP with a dense embedding-cosine (mechanism) similarity — <i>never outcome similarity</i>. Layered on three bases.<br><br>
+<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>cap</b>: ≤ c per CORUM complex (discrete hedge). &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · CORUM</b>: same, but with the <i>external</i> CORUM pathway-matrix (Jaccard co-membership) similarity. Neither is outcome similarity. CORUM is the single external knowledge source (membership → cap; pathway matrix → k-DPP). Layered on three bases (greedy / truncation / ehvi_trunc). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
 <b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).
 """
 
@@ -595,7 +632,8 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
                                    f"Assayed-set quality ({src} toxicity).", f"assayed_{src}")
                        if asy_rows else "",
             kdpp_sim=kdpp_sim, b_cols=b_cols, b_rows=b_rows,
-            b_bar=_b_bar(dB, src, fig_dir), b_eff_conc=_b_eff_conc(dB, src, fig_dir))
+            b_bar=_b_bar(dB, src, fig_dir), b_eff_conc=_b_eff_conc(dB, src, fig_dir),
+            failure_sim=_failure_curve(dB, src, fig_dir))
         facets.append({"block": block, "headline_a": _headline_A(dA)})
 
     panel = meta.get("panel") or ""

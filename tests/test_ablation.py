@@ -10,8 +10,9 @@ import pytest
 
 from geneal.runner.ablation import (
     run_acquisition, nominate, evaluate, build_string_S, build_embedding_S,
-    ACQUISITIONS,
+    build_corum_S, ACQUISITIONS,
 )
+from geneal.metrics.portfolio import dropout_curve
 from geneal.models.surrogate import GPRSurrogate
 
 
@@ -156,6 +157,30 @@ def test_joint_gp_nominate_and_acquire():
     sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="pred",
                    diversity="none", tau=0.5, surr_factory=_factory, joint_factory=jf)
     assert len(sel) == 6 and len(set(sel)) == 6
+
+
+def test_build_corum_S_jaccard():
+    # genes 0,1 share complex A; gene 2 in B; gene 3 unannotated
+    membership = {0: {"A"}, 1: {"A"}, 2: {"B"}, 3: set()}
+    S = build_corum_S(membership, 4)
+    assert S.shape == (4, 4)
+    assert np.allclose(np.diag(S), 1.0) and np.allclose(S, S.T)
+    assert np.isclose(S[0, 1], 1.0)        # identical complex sets -> Jaccard 1
+    assert np.isclose(S[0, 2], 0.0)        # disjoint complexes
+    assert np.isclose(S[0, 3], 0.0)        # unannotated -> 0
+    # partial overlap -> Jaccard 1/2
+    S2 = build_corum_S({0: {"A", "B"}, 1: {"A"}}, 2)
+    assert np.isclose(S2[0, 1], 0.5)
+
+
+def test_dropout_curve_monotone():
+    # 4 picks, two pathways; value uniform
+    membership = {0: {"A"}, 1: {"A"}, 2: {"B"}, 3: {"B"}}
+    val = np.array([1.0, 1.0, 1.0, 1.0])
+    c = dropout_curve([0, 1, 2, 3], membership, val, max_drop=3)
+    assert c[0] == 1.0
+    assert all(c[i] >= c[i + 1] - 1e-9 for i in range(len(c) - 1))   # non-increasing
+    assert np.isclose(c[1], 0.5)   # dropping one of two equal pathways -> half survives
 
 
 def test_build_string_S_shape_and_diag():

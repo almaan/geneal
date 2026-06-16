@@ -304,6 +304,31 @@ def build_embedding_S(X):
 
 
 
+def build_corum_S(membership, n):
+    """Dense (n,n) CORUM pathway similarity: S_ij = Jaccard overlap of the two
+    genes' complex-membership sets (|Ci∩Cj| / |Ci∪Cj|), unit diagonal. Genes
+    sharing no complex -> 0; unannotated genes are isolated. Built from a sparse
+    gene×complex incidence (M Mᵀ gives intersection counts). EXTERNAL knowledge
+    (CORUM) similarity for the k-DPP ablation vs the learned embedding cosine."""
+    import scipy.sparse as sp
+    comps = sorted({c for s in membership.values() for c in s})
+    if not comps:
+        return np.eye(n, dtype=float)
+    cidx = {c: j for j, c in enumerate(comps)}
+    rows, cols = [], []
+    for i in range(n):
+        for c in membership.get(i, ()):
+            rows.append(i); cols.append(cidx[c])
+    M = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, len(comps)))
+    inter = np.asarray((M @ M.T).todense(), dtype=float)
+    sizes = np.asarray(M.sum(1)).ravel()
+    union = sizes[:, None] + sizes[None, :] - inter
+    with np.errstate(invalid="ignore", divide="ignore"):
+        S = np.where(union > 0, inter / union, 0.0)
+    np.fill_diagonal(S, 1.0)
+    return S
+
+
 def build_string_S(gene_names,
                    edges_path="data/processed/depmap/string_edges_all.parquet"):
     """Dense (n,n) STRING combined-score similarity over a gene panel, built from

@@ -36,7 +36,9 @@ from geneal.data.depmap import load_gene_effect, parse_entrez
 from geneal.data.selective import (build_selective_dataset, corum_membership,
                                    toxicity_vector, rank_contrast_lines)
 from geneal.runner.ablation import (run_acquisition, nominate, evaluate,
-                                    build_string_S, build_embedding_S, _tox_threshold)
+                                    build_string_S, build_embedding_S, build_corum_S,
+                                    _tox_threshold)
+from geneal.metrics.portfolio import dropout_curve
 
 # Acquisition specs: acq_key -> (kind, acq_safety). acq_safety constrains the
 # per-round candidate pool to believed-safe genes (none/known/pred).
@@ -76,7 +78,16 @@ B_BASES = [
     ("truncation",  "greedy",    "known"),
     ("ehvi_trunc",  "ehvi",      "pred"),
 ]
-DIVERSITY_OPS = ["none", "cap", "kdpp"]
+# Section-B diversity operators. (op_label, mode, similarity-source).
+# kdpp splits by the k-DPP similarity S: learned embedding cosine vs external
+# CORUM pathway matrix (the similarity ablation).
+DIVERSITY_OPS = [
+    ("none",       "none", None),
+    ("cap",        "cap",  None),       # CORUM per-pathway cap (discrete hedge)
+    ("kdpp_emb",   "kdpp", "embedding"),
+    ("kdpp_corum", "kdpp", "corum"),
+]
+MAX_DROP = 5   # failure-simulation horizon (# pathways dropped)
 TOX_SOURCES = ["contrast", "aggregate"]
 # acquisitions that do NOT depend on the toxicity definition (computed once/line,seed)
 _TOX_INDEP_ACQ = ["random", "greedy", "farthest", "cluster", "info_div"]
@@ -202,8 +213,11 @@ def main():
         X = StandardScaler().fit_transform(ds.embeddings)
         eff = np.asarray(ds.target, float)            # raw lethality in this line
         mem = corum_membership(ds.gene_names)
-        S = (build_embedding_S(X) if args.kdpp_sim == "embedding"
-             else build_string_S(ds.gene_names, args.string))
+        # k-DPP similarities: learned embedding cosine vs external CORUM pathway
+        # matrix (the Section-B similarity ablation).
+        S_emb = build_embedding_S(X)
+        S_corum = build_corum_S(mem, len(eff))
+        S_by_src = {"embedding": S_emb, "corum": S_corum}
         tox_by_source = {
             src: toxicity_vector(ge, ds.gene_names, src, target_line=cl,
                                  contrast_line=contrast_line, thresh=args.thresh)
@@ -243,7 +257,7 @@ def main():
                     for r, rev_r in enumerate(h):
                         a = quick(rev_r, eff, tox, ceiling)                       # assayed-so-far
                         seln = nominate(rev_r, X, eff, tox, mem, safety=safety,
-                                        diversity="none", S=S, **nom_common)
+                                        diversity="none", S=None, **nom_common)
                         nq = quick(seln, eff, tox, ceiling)                       # nomination
                         round_rows.append(dict(
                             tox_source=src, method=label, cell_line=cl, seed=seed, round=r,
@@ -254,23 +268,26 @@ def main():
                             nom_mean_efficacy_safe=nq["mean_efficacy_safe"],
                             nom_mean_toxicity=nq["mean_toxicity"], nom_n_safe=nq["n_safe"]))
                     sel = nominate(h[-1], X, eff, tox, mem, safety=safety,
-                                   diversity="none", S=S, **nom_common)
+                                   diversity="none", S=None, **nom_common)
                     m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
                     rows.append(dict(analysis="A", tox_source=src, method=label,
                                      base=label, operator="none", acq=acq_key,
                                      safety=safety, cell_line=cl, seed=seed, **m))
                     if want_scatter:
                         picks[label] = set(sel)
-                # Analysis B (final only)
+                # Analysis B (final only): 3 bases x {none, cap, kdpp_emb, kdpp_corum}
                 for base_label, acq_key, safety in B_BASES:
-                    for op in DIVERSITY_OPS:
+                    for op_label, mode, simsrc in DIVERSITY_OPS:
+                        Sb = S_by_src.get(simsrc) if simsrc else None
                         sel = nominate(hist[acq_key][-1], X, eff, tox, mem, safety=safety,
-                                       diversity=op, S=S, **nom_common)
+                                       diversity=mode, S=Sb, **nom_common)
                         m = evaluate(sel, eff, tox, mem, X, tox_ceiling=ceiling)
+                        dc = dropout_curve(sel, mem, eff, MAX_DROP)   # value-of-diversity
                         rows.append(dict(analysis="B", tox_source=src,
-                                         method=f"{base_label}+{op}", base=base_label,
-                                         operator=op, acq=acq_key, safety=safety,
-                                         cell_line=cl, seed=seed, **m))
+                                         method=f"{base_label}+{op_label}", base=base_label,
+                                         operator=op_label, acq=acq_key, safety=safety,
+                                         cell_line=cl, seed=seed, **m,
+                                         **{f"drop_{i}": dc[i] for i in range(len(dc))}))
                 if want_scatter:
                     sc = pd.DataFrame({"efficacy": eff, "toxicity": tox})
                     for label, pk in picks.items():
