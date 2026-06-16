@@ -85,9 +85,8 @@ B_BASE_SHORT = {"greedy": "greedy", "ehvi": "EHVI", "trunc_pred": "greedy·nom·
 
 _A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy"),
                    ("mean_efficacy_safe", "Mean efficacy (permissible)"),
-                   ("max_efficacy", "Max efficacy"), ("mean_toxicity", "Mean toxicity"),
-                   ("n_safe", "# safe (of K)")]
-_A_DIAG_METRICS = [("n_novel", "# novel (of K)"),
+                   ("mean_toxicity", "Mean toxicity"), ("n_safe", "# safe (of K)")]
+_A_DIAG_METRICS = [("max_efficacy", "Max efficacy"), ("n_novel", "# novel (of K)"),
                    ("hypervolume", "Hypervolume (eff,−tox)"),
                    ("pareto_recall", "Pareto recall↑")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
