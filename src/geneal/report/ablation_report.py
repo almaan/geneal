@@ -65,7 +65,7 @@ ACQ_LABELS = {"random": "random", "greedy": "greedy/UCB", "farthest": "farthest"
               "cluster": "cluster", "info_div": "info-diverse", "ehvi": "EHVI",
               "greedy_safe": "greedy+safe", "ehvi_safe": "EHVI+safe",
               "known_safe": "known-safe (upper bd)"}
-OP_ORDER = ["none", "cap", "kdpp_emb", "kdpp_corum"]
+OP_ORDER = ["none", "kdpp_emb", "kdpp_corum"]   # 'cap' excluded (not a general baseline)
 OP_LABELS = {"none": "none", "cap": "cap (CORUM)", "kdpp_emb": "k-DPP · embedding",
              "kdpp_corum": "k-DPP · CORUM"}
 OP_SHORT = {"none": "none", "cap": "cap", "kdpp_emb": "kdpp·emb", "kdpp_corum": "kdpp·CORUM"}
@@ -676,7 +676,7 @@ _GLOSSARY = """
 <b>Safety rules (Analysis A).</b>
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>filter · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>filter · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>The known-toxicity filter is the limit the learned rules chase.</i><br><br>
 <b>Filter timing (end-stage vs per-round).</b> The filter can be applied only to the final shortlist (<i>end-stage</i>, <code>nom</code>) or at <i>every acquisition round</i> (<code>RT</code>), restricting each round to genes believed safe — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination remain distinct stages; per-round filtering constrains both.<br><br>
-<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>cap</b>: ≤ c per CORUM complex (discrete hedge). &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · CORUM</b>: same, but with the <i>external</i> CORUM pathway-matrix (Jaccard co-membership) similarity. Neither is outcome similarity. CORUM is the single external knowledge source (membership → cap; pathway matrix → k-DPP). Layered on three bases (greedy / truncation / ehvi_trunc). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
+<b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · CORUM</b>: same, but with the <i>external</i> CORUM pathway-matrix (Jaccard co-membership) similarity. Neither is outcome similarity — the embedding-vs-CORUM gap is the similarity-source ablation. Layered on the four safety-aware bases (G·nom·P / G·RT·P / E·nom·P / E·RT·P). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
 <b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).
 """
 

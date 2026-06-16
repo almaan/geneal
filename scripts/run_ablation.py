@@ -96,10 +96,9 @@ B_BASES = [
 # CORUM pathway matrix (the similarity ablation).
 DIVERSITY_OPS = [
     ("none",       "none", None),
-    ("cap",        "cap",  None),       # CORUM per-pathway cap (discrete hedge)
-    ("kdpp_emb",   "kdpp", "embedding"),
-    ("kdpp_corum", "kdpp", "corum"),
-]
+    ("kdpp_emb",   "kdpp", "embedding"),   # quality-weighted k-DPP, embedding-cosine S
+    ("kdpp_corum", "kdpp", "corum"),       # k-DPP, external CORUM pathway-matrix S
+]   # (per-pathway 'cap' is implemented in HedgedSelect but excluded -- not a general baseline)
 MAX_DROP = 5   # failure-simulation horizon (# pathways dropped)
 TOX_SOURCES = ["contrast", "aggregate"]
 
