@@ -85,9 +85,8 @@ B_BASE_SHORT = {"greedy": "greedy", "ehvi": "EHVI", "trunc_pred": "greedy·nom",
                 "greedy_safe": "greedy·RT", "ehvi_trunc": "EHVI·nom",
                 "ehvi_safe": "EHVI·RT"}
 
-_A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy"),
-                   ("useful_efficacy", "Useful efficacy"),
-                   ("mean_toxicity", "Mean toxicity"), ("n_safe", "# safe (of K)")]
+_A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy"), ("mean_toxicity", "Mean toxicity"),
+                   ("useful_efficacy", "Realizable efficacy"), ("n_safe", "# safe (of K)")]
 _A_DIAG_METRICS = [("max_efficacy", "Max efficacy"), ("n_novel", "# novel (of K)"),
                    ("hypervolume", "Hypervolume (eff,−tox)"),
                    ("pareto_recall_norm", "Pareto recall (norm)↑")]
@@ -208,14 +207,6 @@ def _draw_tradeoff(ax, d, methods, ceiling, tau, legend=True):
         ax.axvline(ceiling, ls="--", lw=1.1, color="#6b7280", zorder=1)
         ax.text(ceiling, ax.get_ylim()[1], f" τ ceiling ({tau:g})", color="#6b7280",
                 fontsize=8, va="top", ha="left")
-    # filter-push arrows: per-round predicted-tox filter moves nominations left (safer)
-    pos = {m: (_ci(d[d.method == m]["mean_toxicity"])[0],
-               _ci(d[d.method == m]["mean_efficacy"])[0]) for m in methods}
-    for a, b in [("greedy", "greedy_safe"), ("ehvi", "ehvi_safe")]:
-        if a in pos and b in pos and np.all(np.isfinite(pos[a])) and np.all(np.isfinite(pos[b])):
-            ax.annotate("", xy=pos[b], xytext=pos[a], zorder=2,
-                        arrowprops=dict(arrowstyle="-|>", color="#555a61", lw=1.3,
-                                        alpha=0.8, connectionstyle="arc3,rad=0.12"))
     _despine(ax)
     ax.set_xlabel("mean toxicity  (← safer)")
     ax.set_ylabel("mean efficacy  (↑ more potent)")
@@ -355,9 +346,9 @@ def _safety_bar(dA, src, fig_dir):
 
 def _final_k_bars(dA, src, fig_dir):
     """Per-method bars of the FINAL nominated K-set metrics (mean over lines x
-    seeds, 95% CI): useful efficacy, mean toxicity, # safe, concentration."""
+    seeds, 95% CI): realizable efficacy, mean toxicity, # safe, concentration."""
     methods = [m for m in A_ORDER if m in set(dA.method)]
-    specs = [("useful_efficacy", "useful efficacy ↑"),
+    specs = [("useful_efficacy", "realizable efficacy ↑"),
              ("mean_toxicity", "mean toxicity ↓"),
              ("n_safe", "# safe (of K) ↑"),
              ("n_novel", "# novel/unassayed (of K)"),
@@ -601,7 +592,7 @@ def _headline_A(d):
         f"(trunc_pred tox {mof('trunc_pred','mean_toxicity'):.2f}, EHVI+trunc "
         f"{mof('ehvi_trunc','mean_toxicity'):.2f}, EHVI-Pareto "
         f"{mof('ehvi_pareto','mean_toxicity'):.2f}) drive toxicity to the threshold while "
-        f"keeping useful efficacy. (Untruncated EHVI baseline: "
+        f"keeping realizable efficacy. (Untruncated EHVI baseline: "
         f"tox {mof('ehvi','mean_toxicity'):.2f}.)"
     )
 
@@ -629,7 +620,7 @@ _FACET_TMPL = """
 <h2>Toxicity definition: <span style="color:#2e6f95">{{ src }}</span>{{ primary }}</h2>
 
 <h3>A &middot; Safety vs efficacy — all methods</h3>
-<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer. Dashed line = the τ toxicity ceiling; the shaded green band left of it is the permissible region. Grey arrows show the per-round filter moving greedy→greedy·per-round and EHVI→EHVI·per-round leftward across the ceiling.</div>
+<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer. Dashed line = the τ toxicity ceiling; the shaded green band left of it is the permissible region.</div>
 <div class="card">{{ tradeoff|safe }}</div>
 {% if consistency %}
 <h3>A &middot; Filter robustness across cell lines</h3>
@@ -664,7 +655,7 @@ _FACET_TMPL = """
 {% endif %}
 {% if final_k %}
 <h3>A &middot; Final K-set performance (per method)</h3>
-<div class="note">The nominated top-{{ cloudK }} shortlist scored on its true values (mean over lines × seeds, 95% CI). Useful efficacy = mean efficacy over the K picks with toxic (non-permissible) picks scored 0.</div>
+<div class="note">The nominated top-{{ cloudK }} shortlist scored on its true values (mean over lines × seeds, 95% CI). Realizable efficacy = mean efficacy over the K picks with toxic (non-permissible) picks scored 0.</div>
 <div class="card">{{ final_k|safe }}</div>
 {% endif %}
 <h3>A &middot; Method table (main)</h3>
@@ -925,7 +916,7 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             cloudK=meta.get("K", ""), n_lines=df.cell_line.nunique(),
             a_cols=a_cols, a_rows=a_rows, a_rows_std=a_rows_std, ad_rows_std=ad_rows_std,
             a_latex_std=_latex_table("method", a_cols, a_rows_std,
-                                     f"Safety vs efficacy ({src} toxicity); cells are mean $\\pm$ sem over cell lines $\\times$ seeds. \\emph{{Useful efficacy}} (mean over the $K$ nominees of efficacy with each non-permissible nominee scored 0 -- equivalently the total efficacy of the safe picks divided by $K$) and \\emph{{\\# safe}} (count of the $K$ nominees with toxicity at or below the $\\tau$ ceiling) are defined only when a toxicity threshold is known, and quantify the threshold-known regime; \\emph{{mean efficacy}} and \\emph{{mean toxicity}} require no threshold.",
+                                     f"Safety vs efficacy ({src} toxicity); cells are mean $\\pm$ sem over cell lines $\\times$ seeds. \\emph{{Realizable efficacy}} (mean over the $K$ nominees of efficacy with each non-permissible nominee scored 0 -- equivalently the total efficacy of the safe picks divided by $K$) and \\emph{{\\# safe}} (count of the $K$ nominees with toxicity at or below the $\\tau$ ceiling) are defined only when a toxicity threshold is known, and quantify the threshold-known regime; \\emph{{mean efficacy}} and \\emph{{mean toxicity}} require no threshold.",
                                      f"A_{src}_sem"),
             ad_latex_std=_latex_table("method", ad_cols, ad_rows_std,
                                       f"Diagnostics ({src} toxicity), mean $\\pm$ sem.",
@@ -938,7 +929,7 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             ad_latex=_latex_table("method", ad_cols, ad_rows,
                                   f"Diagnostics ({src} toxicity).", f"Adiag_{src}"),
             a_latex=_latex_table("method", a_cols, a_rows,
-                                 f"Safety vs efficacy ({src} toxicity); cells are mean $\\pm$ 95\\% CI over cell lines $\\times$ seeds. \\emph{{Useful efficacy}} (mean over the $K$ nominees of efficacy with each non-permissible nominee scored 0 -- equivalently the total efficacy of the safe picks divided by $K$) and \\emph{{\\# safe}} (count of the $K$ nominees with toxicity at or below the $\\tau$ ceiling) are defined only when a toxicity threshold is known, and quantify the threshold-known regime; \\emph{{mean efficacy}} and \\emph{{mean toxicity}} require no threshold.", f"A_{src}"),
+                                 f"Safety vs efficacy ({src} toxicity); cells are mean $\\pm$ 95\\% CI over cell lines $\\times$ seeds. \\emph{{Realizable efficacy}} (mean over the $K$ nominees of efficacy with each non-permissible nominee scored 0 -- equivalently the total efficacy of the safe picks divided by $K$) and \\emph{{\\# safe}} (count of the $K$ nominees with toxicity at or below the $\\tau$ ceiling) are defined only when a toxicity threshold is known, and quantify the threshold-known regime; \\emph{{mean efficacy}} and \\emph{{mean toxicity}} require no threshold.", f"A_{src}"),
             b_latex=_latex_table("base + operator", b_cols, b_rows,
                                  f"Diversity -- CORUM complexes ({src} toxicity).", f"Bcorum_{src}"),
             bs_latex=_latex_table("base + operator", bs_cols, bs_rows,
