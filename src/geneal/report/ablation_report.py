@@ -124,44 +124,6 @@ def _cell(mn, ci):
     return "—" if np.isnan(mn) else f"{mn:.3f} ± {ci:.3f}"
 
 
-# directional shading: which way is "good" per metric. mean_efficacy is omitted
-# on purpose (neutral/grey) -- raw efficacy rewards toxic picks, so we do not
-# color it as good. Shared by the HTML table (bg) and the LaTeX \cellcolor.
-_DIRECTION = {"mean_toxicity": "low", "mean_efficacy_safe": "high", "n_safe": "high",
-              "max_efficacy": "high", "n_novel": "high", "hypervolume": "high",
-              "pareto_recall_norm": "high"}
-
-
-def _goodness_hex(g):
-    """g in [0,1] (1=good) -> pale red→white→green hex (no '#'), text stays legible."""
-    red, white, green = (214, 73, 91), (255, 255, 255), (27, 158, 119)
-    if g < 0.5:
-        t = g / 0.5; c = [red[i] + (white[i] - red[i]) * t for i in range(3)]
-    else:
-        t = (g - 0.5) / 0.5; c = [white[i] + (green[i] - white[i]) * t for i in range(3)]
-    c = [0.42 * c[i] + 0.58 * 255 for i in range(3)]   # lighten so text reads
-    return "{:02X}{:02X}{:02X}".format(*[int(round(v)) for v in c])
-
-
-def _shade(values, direction):
-    """Per-value pale hex (no '#') oriented by direction ('low'/'high' = good);
-    None for neutral columns, NaNs, or a degenerate (constant) column."""
-    if direction not in ("low", "high"):
-        return [None] * len(values)
-    v = np.array([np.nan if x is None else x for x in values], float)
-    fin = v[np.isfinite(v)]
-    if len(fin) < 2 or np.ptp(fin) == 0:
-        return [None] * len(values)
-    lo, hi = float(fin.min()), float(fin.max())
-    out = []
-    for x in v:
-        if not np.isfinite(x):
-            out.append(None); continue
-        g = (x - lo) / (hi - lo)
-        out.append(_goodness_hex(1 - g if direction == "low" else g))
-    return out
-
-
 _TEX = [("±", r"$\pm$"), ("↑", r"$\uparrow$"), ("↓", r"$\downarrow$"),
         ("α", r"$\alpha$"), ("·", r"$\cdot$"), ("τ", r"$\tau$"),
         ("&", r"\&"), ("%", r"\%"), ("_", r"\_"), ("#", r"\#")]
@@ -183,14 +145,7 @@ def _latex_table(row_header, cols, rows, caption, label):
            r"\midrule"]
     for r in rows:
         name = r.get("m") or r.get("label") or ""
-        cells = []
-        for cell in r["cells"]:
-            if isinstance(cell, dict):                       # shaded A-table cell
-                col = cell.get("c")
-                cells.append((f"\\cellcolor[HTML]{{{col}}} " if col else "") + _tex(cell["t"]))
-            else:
-                cells.append(_tex(cell))
-        out.append(_tex(name) + " & " + " & ".join(cells) + r" \\")
+        out.append(_tex(name) + " & " + " & ".join(_tex(c) for c in r["cells"]) + r" \\")
     out += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
     return "\n".join(out)
 
@@ -371,13 +326,9 @@ def _gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir):
 def _table_A(d, metric_set, kind="ci"):
     methods = [m for m in A_ORDER if m in set(d.method)]
     metrics = [(c, lbl) for c, lbl in metric_set if c in d.columns]
-    stats = {(m, c): _stat(d[d.method == m][c], kind) for m in methods for c, _ in metrics}
-    # per-column directional shading (computed on the means, so identical for ci/sem)
-    colmap = {c: _shade([stats[(m, c)][0] for m in methods], _DIRECTION.get(c))
-              for c, _ in metrics}
     rows = []
-    for i, m in enumerate(methods):
-        cells = [{"t": _cell(*stats[(m, c)]), "c": colmap[c][i]} for c, _ in metrics]
+    for m in methods:
+        cells = [_cell(*_stat(d[d.method == m][c], kind)) for c, _ in metrics]
         rows.append({"m": LABELS.get(m, m), "cells": cells})
     return [lbl for _, lbl in metrics], rows
 
@@ -717,24 +668,24 @@ _FACET_TMPL = """
 <div class="card">{{ final_k|safe }}</div>
 {% endif %}
 <h3>A &middot; Method table (main)</h3>
-<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants. Cells = mean ± 95% CI. <b>Shading is directional</b>: <span style="background:#9FE0CD;padding:0 4px">green = better</span> → <span style="background:#F0B9C1;padding:0 4px">red = worse</span> per column (toxicity lower-is-better; #safe and permissible efficacy higher-is-better). Raw <i>Mean efficacy</i> is left unshaded — it rewards toxic picks and is read jointly with toxicity. The LaTeX export carries the same shading via <code>\\cellcolor</code> (needs <code>\\usepackage[table]{xcolor}</code>).</div>
+<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants. Cells = mean ± 95% CI.</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in a_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in a_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex_std }}</code></pre></details></details></div>
 <h3>A &middot; Diagnostics</h3>
 <div class="note">Secondary / diagnostic quantities — # novel (unassayed) nominees, nominee hypervolume, and normalized Pareto recall. Cells = mean ± 95% CI.</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in ad_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in ad_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex_std }}</code></pre></details></details></div>
 {% if assayed_img %}
 <h3>A &middot; Assayed set — quality of the genes actually measured</h3>
