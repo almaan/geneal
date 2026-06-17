@@ -1,0 +1,23 @@
+	Command being timed: "python -u scripts/run_ablation.py --embeddings data/processed/embeddings/pubmedbert_all.parquet --panel-a none --panel-b none --joint-gp --no-report --cell-lines ACH-000696 --contrast-line ACH-001360 --seeds 0 --K 30 --n-initial 40 --n-rounds 8 --batch 10 --tau 0.5 --out-root res/runs_ablation/smoke_bfull --run-name shard_0"
+	User time (seconds): 8977.80
+	System time (seconds): 1974.51
+	Percent of CPU this job got: 1483%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 12:18.22
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 14958548
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 1002
+	Minor (reclaiming a frame) page faults: 636957159
+	Voluntary context switches: 33462
+	Involuntary context switches: 70052
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 2312
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

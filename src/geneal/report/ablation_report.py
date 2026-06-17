@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import io
 import math
+import os
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -36,6 +37,10 @@ plt.rcParams.update({
     "xtick.labelsize": 9, "ytick.labelsize": 9,
     "figure.dpi": 120, "savefig.dpi": 120, "svg.fonttype": "none",
 })
+
+# Resolution of the PNGs embedded in the HTML report. Higher = sharper but a
+# larger HTML file (size grows ~ (dpi/120)^2). Override with GENEAL_REPORT_DPI.
+_PNG_DPI = int(os.environ.get("GENEAL_REPORT_DPI", "200"))
 
 COLORS = {
     "greedy": "#d1495b", "trunc_known": "#2e6f95", "trunc_pred": "#7eb6d9",
@@ -225,10 +230,10 @@ def _emit(fig, fig_dir, name):
     """Embed the figure as a base64 PNG <img>; also save PDF+PNG when fig_dir set."""
     if fig_dir is not None:
         fig_dir = Path(fig_dir); fig_dir.mkdir(parents=True, exist_ok=True)
-        fig.savefig(fig_dir / f"{name}.pdf", bbox_inches="tight")
-        fig.savefig(fig_dir / f"{name}.png", bbox_inches="tight")
+        fig.savefig(fig_dir / f"{name}.pdf", bbox_inches="tight")               # vector
+        fig.savefig(fig_dir / f"{name}.png", bbox_inches="tight", dpi=_PNG_DPI)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=_PNG_DPI)
     plt.close(fig)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     return f'<img src="data:image/png;base64,{b64}" style="max-width:100%;height:auto"/>'
