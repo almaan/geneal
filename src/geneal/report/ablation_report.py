@@ -47,10 +47,10 @@ COLORS = {
 # RT=per-round; K=known tox, P=predicted tox (spelled out in the glossary).
 LABELS = {
     "greedy": "greedy", "trunc_known": "greedy · nom · known",
-    "trunc_pred": "greedy · nom · pred", "greedy_safe": "greedy · per-round · pred",
+    "trunc_pred": "greedy · nom", "greedy_safe": "greedy · per-round",
     "known_safe": "greedy · per-round · known (upper bd)",
     "ehvi": "EHVI", "ehvi_pareto": "EHVI · Pareto-nom",
-    "ehvi_trunc": "EHVI · nom · pred", "ehvi_safe": "EHVI · per-round · pred",
+    "ehvi_trunc": "EHVI · nom", "ehvi_safe": "EHVI · per-round",
     "random": "random", "farthest": "farthest", "cluster": "cluster",
     "info_div": "info-diverse",
 }
@@ -81,9 +81,9 @@ OP_COLOR = {"none": "#9aa0a6", "cap": "#2e6f95", "kdpp_emb": "#1b9e77",
 B_BASE_ORDER = ["greedy", "trunc_pred", "greedy_safe", "ehvi", "ehvi_trunc", "ehvi_safe"]
 B_BASE_COLOR = {"greedy": "#d1495b", "ehvi": "#9aa0a6", "trunc_pred": "#2e6f95",
                 "greedy_safe": "#7eb6d9", "ehvi_trunc": "#1b9e77", "ehvi_safe": "#13634a"}
-B_BASE_SHORT = {"greedy": "greedy", "ehvi": "EHVI", "trunc_pred": "greedy·nom·P",
-                "greedy_safe": "greedy·RT·P", "ehvi_trunc": "EHVI·nom·P",
-                "ehvi_safe": "EHVI·RT·P"}
+B_BASE_SHORT = {"greedy": "greedy", "ehvi": "EHVI", "trunc_pred": "greedy·nom",
+                "greedy_safe": "greedy·RT", "ehvi_trunc": "EHVI·nom",
+                "ehvi_safe": "EHVI·RT"}
 
 _A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy"),
                    ("mean_efficacy_safe", "Mean efficacy (permissible)"),
@@ -249,7 +249,7 @@ def _consistency_strip(dA, src, fig_dir, a="greedy", b="greedy_safe"):
     ax.axvline(0, color="#444a52", lw=0.8)
     ax.set_yticks(range(len(delta)))
     ax.set_yticklabels(list(delta.index), fontsize=6)
-    ax.set_xlabel("toxicity reduction:  greedy − greedy·per-round·pred   (→ filter safer)")
+    ax.set_xlabel("toxicity reduction:  greedy − greedy·per-round   (→ filter safer)")
     n_pos = int((delta > 0).sum())
     ax.set_title(f"predicted-tox filter safer than greedy in {n_pos}/{len(delta)} lines",
                  fontsize=10)
@@ -629,11 +629,11 @@ _FACET_TMPL = """
 <h2>Toxicity definition: <span style="color:#2e6f95">{{ src }}</span>{{ primary }}</h2>
 
 <h3>A &middot; Safety vs efficacy — all methods</h3>
-<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer. Dashed line = the τ toxicity ceiling; the shaded green band left of it is the permissible region. Grey arrows show the per-round predicted-tox filter moving greedy→greedy·per-round·pred and EHVI→EHVI·per-round·pred leftward across the ceiling.</div>
+<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer. Dashed line = the τ toxicity ceiling; the shaded green band left of it is the permissible region. Grey arrows show the per-round filter moving greedy→greedy·per-round and EHVI→EHVI·per-round leftward across the ceiling.</div>
 <div class="card">{{ tradeoff|safe }}</div>
 {% if consistency %}
 <h3>A &middot; Filter robustness across cell lines</h3>
-<div class="note">Per-line toxicity reduction from the per-round predicted-tox filter (greedy minus greedy·per-round·pred), paired under common random numbers. All-positive bars = the filter is safer than greedy in every line.</div>
+<div class="note">Per-line toxicity reduction from the per-round filter (greedy minus greedy·per-round), paired under common random numbers. All-positive bars = the filter is safer than greedy in every line.</div>
 <div class="card">{{ consistency|safe }}</div>
 {% endif %}
 {% if safety_bar %}
@@ -872,7 +872,7 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 
 _GLOSSARY = """
 <b>Two analyses, two questions, two toxicity definitions.</b><br><br>
-<b>Reading method labels</b> (compact <code>[acq]·[filtering]·[tox]</code>): <b>G</b>=greedy acquisition (UCB on efficacy), <b>E</b>=EHVI (dual-objective); <b>nom</b>=filter the final shortlist only, <b>RT</b>=per-round filtering (filter the candidate pool every round); <b>P</b>=predicted toxicity (learned GP). So <code>G·RT·P</code> = greedy acquisition + per-round filter on predicted toxicity; <code>E·RT·P</code> = EHVI + per-round filter on predicted toxicity. <code>random/farthest/cluster/info-div</code> are the no-safety baselines.<br><br>
+<b>Reading method labels</b> (compact <code>[acq]·[filtering]</code>): <b>greedy</b>=greedy acquisition (UCB on efficacy), <b>EHVI</b>=dual-objective acquisition; <b>nom</b>=filter the final shortlist only, <b>per-round</b>=filter the candidate pool every round. All filtering uses the GP-<b>predicted</b> toxicity (the toxicity code is dropped from labels since no oracle/known variants are shown). So <code>greedy·per-round</code> = greedy acquisition + per-round predicted-tox filter; <code>EHVI·per-round</code> = EHVI + per-round predicted-tox filter. <code>random/farthest/cluster/info-div</code> are the no-safety baselines.<br><br>
 <b>Safety rules (Analysis A).</b>
 &bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>filter · predicted</b>: keep genes below the τ toxicity ceiling using the GP-<i>learned</i> toxicity. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like).<br><br>
 <b>Filter timing (end-stage vs per-round).</b> The filter can be applied only to the final shortlist (<i>end-stage</i>, <code>nom</code>) or at <i>every acquisition round</i> (<code>RT</code>), restricting each round to genes believed safe — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination remain distinct stages; per-round filtering constrains both.<br><br>
