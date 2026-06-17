@@ -142,7 +142,12 @@ def _latex_table(row_header, cols, rows, caption, label):
            r"\begin{tabular}{l" + "r" * len(cols) + "}", r"\toprule",
            _tex(row_header) + " & " + " & ".join(_tex(c) for c in cols) + r" \\",
            r"\midrule"]
+    prev_group = None
     for r in rows:
+        group = r.get("group")
+        if prev_group is not None and group is not None and group != prev_group:
+            out.append(r"\midrule")          # rule between method families (baseline/greedy/EHVI)
+        prev_group = group
         name = r.get("m") or r.get("label") or ""
         out.append(_tex(name) + " & " + " & ".join(_tex(c) for c in r["cells"]) + r" \\")
     out += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
@@ -208,7 +213,7 @@ def _draw_tradeoff(ax, d, methods, ceiling, tau, legend=True):
         ax.text(ceiling, ax.get_ylim()[1], f" τ ceiling ({tau:g})", color="#6b7280",
                 fontsize=8, va="top", ha="left")
     _despine(ax)
-    ax.set_xlabel("mean toxicity  (← safer)")
+    ax.set_xlabel("mean toxicity  (→ more toxic)")
     ax.set_ylabel("mean efficacy  (↑ more potent)")
     if legend:
         _legend_out(ax, fontsize=8, ncol=1)
@@ -314,13 +319,19 @@ def _gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir):
     return {"agg": agg, "per": per}
 
 
+_A_FAMILY = {**{m: "baseline" for m in ("random", "farthest", "cluster", "info_div")},
+             **{m: "greedy" for m in ("greedy", "trunc_pred", "greedy_safe",
+                                      "trunc_known", "known_safe")},
+             **{m: "ehvi" for m in ("ehvi", "ehvi_pareto", "ehvi_trunc", "ehvi_safe")}}
+
+
 def _table_A(d, metric_set, kind="ci"):
     methods = [m for m in A_ORDER if m in set(d.method)]
     metrics = [(c, lbl) for c, lbl in metric_set if c in d.columns]
     rows = []
     for m in methods:
         cells = [_cell(*_stat(d[d.method == m][c], kind)) for c, _ in metrics]
-        rows.append({"m": LABELS.get(m, m), "cells": cells})
+        rows.append({"m": LABELS.get(m, m), "cells": cells, "group": _A_FAMILY.get(m)})
     return [lbl for _, lbl in metrics], rows
 
 
@@ -470,7 +481,7 @@ def _round_curves(rounds, src, fig_dir):
 
 
 # ---- Section B ---------------------------------------------------------------
-def _b_table(d, ops, metrics):
+def _b_table(d, ops, metrics, kind="ci"):
     cols = [lbl for _, lbl in metrics]
     rows = []
     for base in B_BASE_ORDER:
@@ -478,7 +489,7 @@ def _b_table(d, ops, metrics):
             g = d[(d.base == base) & (d.operator == op)]
             if not len(g) or metrics[0][0] not in g.columns:
                 continue
-            cells = [_cell(*_ci(g[c])) for c, _ in metrics]
+            cells = [_cell(*_stat(g[c], kind)) for c, _ in metrics]
             rows.append({"label": f"{B_BASE_SHORT.get(base, base)} + {OP_LABELS.get(op, op)}",
                          "cells": cells})
     return cols, rows
@@ -707,13 +718,21 @@ _FACET_TMPL = """
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in b_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex }}</code></pre></details></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex }}</code></pre></details>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
+<table><thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in b_rows_sem %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex_sem }}</code></pre></details></details></div>
 <h4>B.2 &middot; STRING (network) diversity</h4>
 <div class="note">Mean / max pairwise STRING similarity of the portfolio (↓ = more mechanistically spread); rows = bases × {none, k-DPP·STRING}.</div>
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in bs_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in bs_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bs_latex }}</code></pre></details></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bs_latex }}</code></pre></details>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
+<table><thead><tr><th>base + operator</th>{% for h in bs_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in bs_rows_sem %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bs_latex_sem }}</code></pre></details></details></div>
 <div class="card">{{ b_bar|safe }}</div>
 <h3>B &middot; Efficacy vs concentration (CORUM)</h3>
 <div class="note">Each line a base; markers are operators (none / k-DPP·STRING / k-DPP·CORUM). Left = better hedged (lower CORUM concentration); high = efficacy retained.</div>
@@ -902,6 +921,8 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
         _, ad_rows_std = _table_A(dA, _A_DIAG_METRICS, "sem")
         b_cols, b_rows = _b_table(dB, _B_CORUM_OPS, _B_METRICS)          # CORUM table
         bs_cols, bs_rows = _b_table(dB, _B_STRING_OPS, _B_STRING_METRICS)  # STRING table
+        _, b_rows_sem = _b_table(dB, _B_CORUM_OPS, _B_METRICS, "sem")
+        _, bs_rows_sem = _b_table(dB, _B_STRING_OPS, _B_STRING_METRICS, "sem")
         assayed_img, (asy_cols, asy_rows) = _assayed_panel(assayed, src, fig_dir)
         rounds_nom, rounds_assayed = _round_curves(rounds, src, fig_dir)
         block = Environment(loader=BaseLoader()).from_string(_FACET_TMPL).render(
@@ -931,9 +952,14 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             a_latex=_latex_table("method", a_cols, a_rows,
                                  f"Safety vs efficacy ({src} toxicity); cells are mean $\\pm$ 95\\% CI over cell lines $\\times$ seeds. \\emph{{Realizable efficacy}} (mean over the $K$ nominees of efficacy with each non-permissible nominee scored 0 -- equivalently the total efficacy of the safe picks divided by $K$) and \\emph{{\\# safe}} (count of the $K$ nominees with toxicity at or below the $\\tau$ ceiling) are defined only when a toxicity threshold is known, and quantify the threshold-known regime; \\emph{{mean efficacy}} and \\emph{{mean toxicity}} require no threshold.", f"A_{src}"),
             b_latex=_latex_table("base + operator", b_cols, b_rows,
-                                 f"Diversity -- CORUM complexes ({src} toxicity).", f"Bcorum_{src}"),
+                                 f"Diversity -- CORUM complexes ({src} toxicity), mean $\\pm$ 95\\% CI.", f"Bcorum_{src}"),
             bs_latex=_latex_table("base + operator", bs_cols, bs_rows,
-                                  f"Diversity -- STRING network ({src} toxicity).", f"Bstring_{src}"),
+                                  f"Diversity -- STRING network ({src} toxicity), mean $\\pm$ 95\\% CI.", f"Bstring_{src}"),
+            b_rows_sem=b_rows_sem, bs_rows_sem=bs_rows_sem,
+            b_latex_sem=_latex_table("base + operator", b_cols, b_rows_sem,
+                                     f"Diversity -- CORUM complexes ({src} toxicity), mean $\\pm$ sem.", f"Bcorum_{src}_sem"),
+            bs_latex_sem=_latex_table("base + operator", bs_cols, bs_rows_sem,
+                                      f"Diversity -- STRING network ({src} toxicity), mean $\\pm$ sem.", f"Bstring_{src}_sem"),
             asy_latex=_latex_table("acquisition", asy_cols, asy_rows,
                                    f"Assayed-set quality ({src} toxicity).", f"assayed_{src}")
                        if asy_rows else "",
