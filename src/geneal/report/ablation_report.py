@@ -55,13 +55,15 @@ LABELS = {
     "info_div": "info-diverse",
 }
 # ordered: baselines, then all greedy variants, then all EHVI variants.
+# 'known'/oracle methods (trunc_known, known_safe) are intentionally excluded
+# from the report (still computed + persisted, just not shown).
 A_ORDER = ["random", "farthest", "cluster", "info_div",
-           "greedy", "trunc_known", "trunc_pred", "greedy_safe", "known_safe",
+           "greedy", "trunc_pred", "greedy_safe",
            "ehvi", "ehvi_pareto", "ehvi_trunc", "ehvi_safe"]
 COLORS.update({"greedy_safe": "#b23a55", "ehvi_safe": "#11806080", "known_safe": "#0b3d91"})
 # acquisitions (for the assayed-set panel + per-round curves)
 ACQ_ORDER = ["random", "greedy", "farthest", "cluster", "info_div", "ehvi",
-             "greedy_safe", "ehvi_safe", "known_safe"]
+             "greedy_safe", "ehvi_safe"]
 ACQ_LABELS = {"random": "random", "greedy": "greedy/UCB", "farthest": "farthest",
               "cluster": "cluster", "info_div": "info-diverse", "ehvi": "EHVI",
               "greedy_safe": "greedy+safe", "ehvi_safe": "EHVI+safe",
@@ -102,13 +104,14 @@ _B_STRING_OPS = ["none", "kdpp_string"]
 
 
 def _stat(x, kind="ci"):
-    """(mean, spread). kind='ci' -> 95% CI half-width (1.96*sem); 'std' -> sample std."""
+    """(mean, spread). kind='ci' -> 95% CI half-width (1.96*sem); 'sem' -> standard
+    error of the mean (std/sqrt(n)); 'std' -> sample std."""
     x = np.asarray(x, float); x = x[~np.isnan(x)]; n = len(x)
     m = float(x.mean()) if n else float("nan")
     if n < 2:
         return m, 0.0
-    sd = float(x.std(ddof=1))
-    return m, (sd if kind == "std" else 1.96 * sd / np.sqrt(n))
+    sd = float(x.std(ddof=1)); sem = sd / np.sqrt(n)
+    return m, {"std": sd, "sem": sem}.get(kind, 1.96 * sem)
 
 
 def _ci(x):
@@ -557,12 +560,11 @@ def _headline_A(d):
         return _ci(g[c])[0] if len(g) else float("nan")
     return (
         f"Naive <b>greedy</b> carries toxicity {mof('greedy','mean_toxicity'):.2f} at "
-        f"efficacy {mof('greedy','mean_efficacy'):.2f}. The <b>known-toxicity ceiling</b> "
-        f"(trunc_known) reaches toxicity {mof('trunc_known','mean_toxicity'):.2f} / efficacy "
-        f"{mof('trunc_known','mean_efficacy'):.2f}; the <b>learned</b> ceilings "
-        f"(trunc_pred {mof('trunc_pred','mean_toxicity'):.2f}, EHVI+trunc "
-        f"{mof('ehvi_trunc','mean_toxicity'):.2f}) sit between — the gap to trunc_known is the "
-        f"price of learning safety from the embedding. (Untruncated EHVI baseline: "
+        f"efficacy {mof('greedy','mean_efficacy'):.2f}. The <b>learned</b> safety rules "
+        f"(trunc_pred tox {mof('trunc_pred','mean_toxicity'):.2f}, EHVI+trunc "
+        f"{mof('ehvi_trunc','mean_toxicity'):.2f}, EHVI-Pareto "
+        f"{mof('ehvi_pareto','mean_toxicity'):.2f}) drive toxicity to the threshold while "
+        f"keeping permissible efficacy. (Untruncated EHVI baseline: "
         f"tox {mof('ehvi','mean_toxicity'):.2f}.)"
     )
 
@@ -629,7 +631,7 @@ _FACET_TMPL = """
 <thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details>
-<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± std</summary>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in a_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex_std }}</code></pre></details></details></div>
@@ -639,7 +641,7 @@ _FACET_TMPL = """
 <thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex }}</code></pre></details>
-<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± std</summary>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in ad_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex_std }}</code></pre></details></details></div>
@@ -828,14 +830,14 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 
 _GLOSSARY = """
 <b>Two analyses, two questions, two toxicity definitions.</b><br><br>
-<b>Reading method labels</b> (compact <code>[acq]·[filtering]·[tox]</code>): <b>G</b>=greedy acquisition (UCB on efficacy), <b>E</b>=EHVI (dual-objective); <b>nom</b>=filter the final shortlist only, <b>RT</b>=per-round filtering (filter the candidate pool every round); <b>K</b>=known toxicity (oracle), <b>P</b>=predicted toxicity (learned GP). So <code>G·nom·K</code> = greedy acquisition + end-stage filter on known toxicity (= oracle ceiling); <code>E·RT·P</code> = EHVI + per-round filter on predicted toxicity. <code>random/farthest/cluster/info-div</code> are the no-safety baselines.<br><br>
+<b>Reading method labels</b> (compact <code>[acq]·[filtering]·[tox]</code>): <b>G</b>=greedy acquisition (UCB on efficacy), <b>E</b>=EHVI (dual-objective); <b>nom</b>=filter the final shortlist only, <b>RT</b>=per-round filtering (filter the candidate pool every round); <b>P</b>=predicted toxicity (learned GP). So <code>G·RT·P</code> = greedy acquisition + per-round filter on predicted toxicity; <code>E·RT·P</code> = EHVI + per-round filter on predicted toxicity. <code>random/farthest/cluster/info-div</code> are the no-safety baselines.<br><br>
 <b>Safety rules (Analysis A).</b>
-&bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>filter · known</b>: keep genes below the τ toxicity ceiling using the <i>known</i> toxicity (oracle limit). &bull; <b>filter · predicted</b>: same ceiling, but toxicity is <i>learned</i> by a GP. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like). <i>The known-toxicity filter is the limit the learned rules chase.</i><br><br>
+&bull; <b>greedy</b>: top-K predicted efficacy, no safety. &bull; <b>filter · predicted</b>: keep genes below the τ toxicity ceiling using the GP-<i>learned</i> toxicity. &bull; <b>EHVI</b>: learned toxicity with a dual-objective EHVI acquisition. &bull; <b>random / farthest / cluster / info_div</b>: prior-work / naive baselines (info_div = informativeness+diversity, IterPert-like; greedy = quality-only, NAIAD-like).<br><br>
 <b>Filter timing (end-stage vs per-round).</b> The filter can be applied only to the final shortlist (<i>end-stage</i>, <code>nom</code>) or at <i>every acquisition round</i> (<code>RT</code>), restricting each round to genes believed safe — so the assay budget isn't spent on genes we think are toxic. Acquisition and nomination remain distinct stages; per-round filtering constrains both.<br><br>
 <b>Diversity operators (Analysis B).</b> &bull; <b>none</b>: top-K by quality. &bull; <b>k-DPP · embedding</b>: quality-weighted k-DPP with the <i>learned</i> embedding-cosine similarity. &bull; <b>k-DPP · STRING</b>: external STRING combined-score network similarity. &bull; <b>k-DPP · CORUM</b>: external CORUM protein-complex (Jaccard co-membership) similarity. None is outcome similarity — the embedding-vs-STRING-vs-CORUM comparison is the similarity-source ablation (learned vs two external knowledge graphs, dense → sparse). Layered on the four safety-aware bases (G·nom·P / G·RT·P / E·nom·P / E·RT·P). A pathway-failure simulation quantifies the value of the resulting diversity.<br><br>
 <b>Toxicity & τ.</b> &bull; <b>contrast</b> (primary): lethality in one fixed contrast line (normal-tissue stand-in). &bull; <b>aggregate</b>: common-essential fraction, excluding the target line. <b>τ is a quantile</b>: the dashed line on each plot is the τ-quantile of the candidate toxicity (τ=0.5 = the safest half) — for the contrast definition, quantile(−effect in the contrast line, τ).<br><br>
 <b>Pareto recall (normalized).</b> Fraction of the true (efficacy, −toxicity) Pareto front recovered by the K nominees, normalized by min(K, |front|) — the most front genes K picks <i>could</i> recover. Genome-wide the front can be hundreds of genes, so the raw fraction is capped near K/|front|; normalizing makes 1.0 attainable and the score discriminating. Threshold-free (a front gene is non-dominated by definition; no efficacy cutoff).<br><br>
-<b>Spread.</b> Tables show mean ± 95% CI (1.96·sem over lines × seeds); each has a "mean ± std" dropdown with the sample standard deviation instead.
+<b>Spread.</b> Tables show mean ± 95% CI (1.96·sem over lines × seeds); each has a "mean ± SEM" dropdown with the standard error of the mean (std/√n) instead.
 """
 
 
@@ -856,8 +858,8 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
         dA, dB = d[d.analysis == "A"], d[d.analysis == "B"]
         a_cols, a_rows = _table_A(dA, _A_MAIN_METRICS, "ci")
         ad_cols, ad_rows = _table_A(dA, _A_DIAG_METRICS, "ci")
-        _, a_rows_std = _table_A(dA, _A_MAIN_METRICS, "std")
-        _, ad_rows_std = _table_A(dA, _A_DIAG_METRICS, "std")
+        _, a_rows_std = _table_A(dA, _A_MAIN_METRICS, "sem")
+        _, ad_rows_std = _table_A(dA, _A_DIAG_METRICS, "sem")
         b_cols, b_rows = _b_table(dB, _B_CORUM_OPS, _B_METRICS)          # CORUM table
         bs_cols, bs_rows = _b_table(dB, _B_STRING_OPS, _B_STRING_METRICS)  # STRING table
         assayed_img, (asy_cols, asy_rows) = _assayed_panel(assayed, src, fig_dir)
@@ -873,11 +875,11 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             cloudK=meta.get("K", ""), n_lines=df.cell_line.nunique(),
             a_cols=a_cols, a_rows=a_rows, a_rows_std=a_rows_std, ad_rows_std=ad_rows_std,
             a_latex_std=_latex_table("method", a_cols, a_rows_std,
-                                     f"Safety vs efficacy ({src} toxicity), mean $\\pm$ std.",
-                                     f"A_{src}_std"),
+                                     f"Safety vs efficacy ({src} toxicity), mean $\\pm$ sem.",
+                                     f"A_{src}_sem"),
             ad_latex_std=_latex_table("method", ad_cols, ad_rows_std,
-                                      f"Diagnostics ({src} toxicity), mean $\\pm$ std.",
-                                      f"Adiag_{src}_std"),
+                                      f"Diagnostics ({src} toxicity), mean $\\pm$ sem.",
+                                      f"Adiag_{src}_sem"),
             headline_b=_headline_B(dB),
             assayed_img=assayed_img, asy_cols=asy_cols, asy_rows=asy_rows,
             rounds_nom=rounds_nom, rounds_assayed=rounds_assayed,

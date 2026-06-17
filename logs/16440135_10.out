@@ -1,0 +1,78 @@
+shard 10: line=ACH-000583 contrast=ACH-001360 node=braid-st-comp-48xl-16
+joint multitask GP enabled for learned-safety methods (trunc_pred, ehvi)
+Analysis A panel: 18531 genes (none); Analysis B panel: 5116 genes (data/processed/depmap/panel_5k.txt)
+contrast-line candidates (best first): ['ACH-001360', 'ACH-000608', 'ACH-000934', 'ACH-002806', 'ACH-000571', 'ACH-000811', 'ACH-001422', 'ACH-001513', 'ACH-001194', 'ACH-003184']
+using contrast line: ACH-001360
+target lines (1): ['ACH-000583']
+[ACH-000583] A=18420 genes, B=5044 genes
+[ACH-000583] done (2 seeds x 2 tox-sources)
+
+=== [contrast toxicity] 1 lines x 2 seeds (mean +/- 95% CI) ===
+[A: safety vs efficacy]
+  greedy       eff 0.955+/-0.693  tox 0.576+/-0.155
+  trunc_known  eff 0.700+/-0.699  tox 0.130+/-0.032
+  trunc_pred   eff 0.719+/-0.858  tox 0.159+/-0.037
+  greedy_safe  eff 0.744+/-1.014  tox 0.166+/-0.028
+  ehvi         eff 1.377+/-0.103  tox 0.441+/-0.245
+  ehvi_pareto  eff 1.287+/-0.073  tox 0.077+/-0.066
+  ehvi_trunc   eff 1.247+/-0.054  tox 0.141+/-0.017
+  ehvi_safe    eff 1.306+/-0.139  tox 0.270+/-0.221
+  known_safe   eff 0.735+/-0.751  tox 0.126+/-0.056
+  random       eff 0.692+/-0.096  tox 0.446+/-0.062
+  cluster      eff 0.928+/-0.026  tox 0.455+/-0.137
+  info_div     eff 1.781+/-0.173  tox 1.964+/-0.155
+[B: diversity / robustness]
+  greedy     +none        conc 0.983 robust 0.690 eff 2.967
+  greedy     +kdpp_string conc 0.114 robust 0.956 eff 1.238
+  greedy     +kdpp_corum  conc 0.756 robust 0.913 eff 2.062
+  ehvi       +none        conc 0.676 robust 0.876 eff 2.071
+  ehvi       +kdpp_string conc 0.134 robust 0.959 eff 1.220
+  ehvi       +kdpp_corum  conc 0.320 robust 0.945 eff 1.512
+  trunc_pred +none        conc 0.149 robust 0.958 eff 0.415
+  trunc_pred +kdpp_string conc 0.129 robust 0.959 eff 0.382
+  trunc_pred +kdpp_corum  conc 0.114 robust 0.957 eff 0.390
+  greedy_safe+none        conc 0.214 robust 0.959 eff 1.132
+  greedy_safe+kdpp_string conc 0.112 robust 0.961 eff 1.061
+  greedy_safe+kdpp_corum  conc 0.225 robust 0.961 eff 1.155
+  ehvi_trunc +none        conc 0.750 robust 0.859 eff 1.262
+  ehvi_trunc +kdpp_string conc 0.115 robust 0.968 eff 1.014
+  ehvi_trunc +kdpp_corum  conc 0.133 robust 0.967 eff 1.257
+  ehvi_safe  +none        conc 0.183 robust 0.961 eff 1.273
+  ehvi_safe  +kdpp_string conc 0.117 robust 0.964 eff 1.079
+  ehvi_safe  +kdpp_corum  conc 0.200 robust 0.964 eff 1.263
+
+=== [aggregate toxicity] 1 lines x 2 seeds (mean +/- 95% CI) ===
+[A: safety vs efficacy]
+  greedy       eff 0.955+/-0.693  tox 0.541+/-0.397
+  trunc_known  eff 0.415+/-0.162  tox 0.142+/-0.075
+  trunc_pred   eff 0.287+/-0.068  tox 0.172+/-0.072
+  greedy_safe  eff 0.285+/-0.033  tox 0.158+/-0.006
+  ehvi         eff 1.450+/-0.945  tox 0.680+/-0.423
+  ehvi_pareto  eff 1.201+/-0.579  tox 0.502+/-0.379
+  ehvi_trunc   eff 0.942+/-0.180  tox 0.402+/-0.199
+  ehvi_safe    eff 1.036+/-0.433  tox 0.555+/-0.220
+  known_safe   eff 0.684+/-0.674  tox 0.218+/-0.224
+  random       eff 0.692+/-0.096  tox 0.345+/-0.089
+  cluster      eff 0.928+/-0.026  tox 0.544+/-0.055
+  info_div     eff 1.781+/-0.173  tox 0.888+/-0.006
+[B: diversity / robustness]
+  greedy     +none        conc 0.983 robust 0.690 eff 2.967
+  greedy     +kdpp_string conc 0.114 robust 0.956 eff 1.238
+  greedy     +kdpp_corum  conc 0.756 robust 0.913 eff 2.062
+  ehvi       +none        conc 0.676 robust 0.876 eff 2.071
+  ehvi       +kdpp_string conc 0.134 robust 0.959 eff 1.220
+  ehvi       +kdpp_corum  conc 0.320 robust 0.945 eff 1.512
+  trunc_pred +none        conc 0.297 robust 0.946 eff 0.703
+  trunc_pred +kdpp_string conc 0.155 robust 0.955 eff 0.503
+  trunc_pred +kdpp_corum  conc 0.298 robust 0.951 eff 0.655
+  greedy_safe+none        conc 0.301 robust 0.928 eff 0.872
+  greedy_safe+kdpp_string conc 0.117 robust 0.964 eff 0.799
+  greedy_safe+kdpp_corum  conc 0.153 robust 0.947 eff 0.872
+  ehvi_trunc +none        conc 0.849 robust 0.781 eff 1.105
+  ehvi_trunc +kdpp_string conc 0.206 robust 0.959 eff 0.952
+  ehvi_trunc +kdpp_corum  conc 0.191 robust 0.964 eff 1.032
+  ehvi_safe  +none        conc 0.512 robust 0.935 eff 1.122
+  ehvi_safe  +kdpp_string conc 0.086 robust 0.962 eff 0.933
+  ehvi_safe  +kdpp_corum  conc 0.297 robust 0.952 eff 1.130
+run dir: res/runs_ablation/sweep_joint_20260617-001129/shard_10
+SHARD DONE

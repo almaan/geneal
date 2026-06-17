@@ -1,0 +1,39 @@
+{
+  "panel_a": "none",
+  "panel_b": "data/processed/depmap/panel_5k.txt",
+  "n_genes_a": 18531,
+  "n_genes_b": 5116,
+  "lines": [
+    "ACH-001401"
+  ],
+  "seeds": [
+    0,
+    1
+  ],
+  "K": 30,
+  "tau": 0.5,
+  "cap": 2,
+  "n_rounds": 8,
+  "batch": 10,
+  "kdpp_sim": "embedding",
+  "acq_score": "ucb",
+  "tau_mode": "absolute",
+  "joint_gp": true,
+  "tox_sources": [
+    "contrast",
+    "aggregate"
+  ],
+  "contrast_line": "ACH-001360",
+  "contrast_ranked": [
+    "ACH-001360",
+    "ACH-000608",
+    "ACH-000934",
+    "ACH-002806",
+    "ACH-000571",
+    "ACH-000811",
+    "ACH-001422",
+    "ACH-001513",
+    "ACH-001194",
+    "ACH-003184"
+  ]
+}
