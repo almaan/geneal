@@ -124,6 +124,44 @@ def _cell(mn, ci):
     return "—" if np.isnan(mn) else f"{mn:.3f} ± {ci:.3f}"
 
 
+# directional shading: which way is "good" per metric. mean_efficacy is omitted
+# on purpose (neutral/grey) -- raw efficacy rewards toxic picks, so we do not
+# color it as good. Shared by the HTML table (bg) and the LaTeX \cellcolor.
+_DIRECTION = {"mean_toxicity": "low", "mean_efficacy_safe": "high", "n_safe": "high",
+              "max_efficacy": "high", "n_novel": "high", "hypervolume": "high",
+              "pareto_recall_norm": "high"}
+
+
+def _goodness_hex(g):
+    """g in [0,1] (1=good) -> pale red→white→green hex (no '#'), text stays legible."""
+    red, white, green = (214, 73, 91), (255, 255, 255), (27, 158, 119)
+    if g < 0.5:
+        t = g / 0.5; c = [red[i] + (white[i] - red[i]) * t for i in range(3)]
+    else:
+        t = (g - 0.5) / 0.5; c = [white[i] + (green[i] - white[i]) * t for i in range(3)]
+    c = [0.42 * c[i] + 0.58 * 255 for i in range(3)]   # lighten so text reads
+    return "{:02X}{:02X}{:02X}".format(*[int(round(v)) for v in c])
+
+
+def _shade(values, direction):
+    """Per-value pale hex (no '#') oriented by direction ('low'/'high' = good);
+    None for neutral columns, NaNs, or a degenerate (constant) column."""
+    if direction not in ("low", "high"):
+        return [None] * len(values)
+    v = np.array([np.nan if x is None else x for x in values], float)
+    fin = v[np.isfinite(v)]
+    if len(fin) < 2 or np.ptp(fin) == 0:
+        return [None] * len(values)
+    lo, hi = float(fin.min()), float(fin.max())
+    out = []
+    for x in v:
+        if not np.isfinite(x):
+            out.append(None); continue
+        g = (x - lo) / (hi - lo)
+        out.append(_goodness_hex(1 - g if direction == "low" else g))
+    return out
+
+
 _TEX = [("±", r"$\pm$"), ("↑", r"$\uparrow$"), ("↓", r"$\downarrow$"),
         ("α", r"$\alpha$"), ("·", r"$\cdot$"), ("τ", r"$\tau$"),
         ("&", r"\&"), ("%", r"\%"), ("_", r"\_"), ("#", r"\#")]
@@ -145,7 +183,14 @@ def _latex_table(row_header, cols, rows, caption, label):
            r"\midrule"]
     for r in rows:
         name = r.get("m") or r.get("label") or ""
-        out.append(_tex(name) + " & " + " & ".join(_tex(c) for c in r["cells"]) + r" \\")
+        cells = []
+        for cell in r["cells"]:
+            if isinstance(cell, dict):                       # shaded A-table cell
+                col = cell.get("c")
+                cells.append((f"\\cellcolor[HTML]{{{col}}} " if col else "") + _tex(cell["t"]))
+            else:
+                cells.append(_tex(cell))
+        out.append(_tex(name) + " & " + " & ".join(cells) + r" \\")
     out += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
     return "\n".join(out)
 
@@ -203,9 +248,19 @@ def _draw_tradeoff(ax, d, methods, ceiling, tau, legend=True):
                     ecolor=COLORS.get(m, "#444"), elinewidth=1.1, capsize=2.5,
                     mec="white", mew=1.0, label=LABELS.get(m, m), zorder=3)
     if ceiling is not None:
+        x0 = ax.get_xlim()[0]
+        ax.axvspan(x0, ceiling, color="#1b9e77", alpha=0.07, zorder=0)  # permissible region
         ax.axvline(ceiling, ls="--", lw=1.1, color="#6b7280", zorder=1)
         ax.text(ceiling, ax.get_ylim()[1], f" τ ceiling ({tau:g})", color="#6b7280",
                 fontsize=8, va="top", ha="left")
+    # filter-push arrows: per-round predicted-tox filter moves nominations left (safer)
+    pos = {m: (_ci(d[d.method == m]["mean_toxicity"])[0],
+               _ci(d[d.method == m]["mean_efficacy"])[0]) for m in methods}
+    for a, b in [("greedy", "greedy_safe"), ("ehvi", "ehvi_safe")]:
+        if a in pos and b in pos and np.all(np.isfinite(pos[a])) and np.all(np.isfinite(pos[b])):
+            ax.annotate("", xy=pos[b], xytext=pos[a], zorder=2,
+                        arrowprops=dict(arrowstyle="-|>", color="#555a61", lw=1.3,
+                                        alpha=0.8, connectionstyle="arc3,rad=0.12"))
     _despine(ax)
     ax.set_xlabel("mean toxicity  (← safer)")
     ax.set_ylabel("mean efficacy  (↑ more potent)")
@@ -219,6 +274,33 @@ def _tradeoff_points(dA, src, scatter, tau, tau_mode, fig_dir):
     _draw_tradeoff(ax, dA, methods, _ceiling(scatter, src, tau, tau_mode), tau)
     fig.tight_layout()
     return _emit(fig, fig_dir, f"tradeoff_{src}")
+
+
+def _consistency_strip(dA, src, fig_dir, a="greedy", b="greedy_safe"):
+    """Per-cell-line toxicity reduction from the per-round predicted-tox filter,
+    tox(a) - tox(b). All-positive bars = the filter is safer than greedy in every
+    line (the paired, common-random-numbers robustness claim)."""
+    if not {a, b}.issubset(set(dA.method)):
+        return None
+    ga = dA[dA.method == a].groupby("cell_line")["mean_toxicity"].mean()
+    gb = dA[dA.method == b].groupby("cell_line")["mean_toxicity"].mean()
+    j = pd.concat([ga, gb], axis=1, keys=["a", "b"]).dropna()
+    if j.empty:
+        return None
+    delta = (j["a"] - j["b"]).sort_values()
+    fig, ax = plt.subplots(figsize=(6.2, max(2.6, 0.30 * len(delta))))
+    ax.barh(range(len(delta)), delta.values,
+            color=["#1b9e77" if x > 0 else "#d1495b" for x in delta.values])
+    ax.axvline(0, color="#444a52", lw=0.8)
+    ax.set_yticks(range(len(delta)))
+    ax.set_yticklabels(list(delta.index), fontsize=6)
+    ax.set_xlabel("toxicity reduction:  greedy − greedy·per-round·pred   (→ filter safer)")
+    n_pos = int((delta > 0).sum())
+    ax.set_title(f"predicted-tox filter safer than greedy in {n_pos}/{len(delta)} lines",
+                 fontsize=10)
+    _despine(ax)
+    fig.tight_layout()
+    return _emit(fig, fig_dir, f"consistency_{src}")
 
 
 def _tradeoff_per_line(dA, src, lines, scatter, tau, tau_mode, fig_dir):
@@ -289,9 +371,13 @@ def _gene_cloud_section(scatter, src, lines, tau, tau_mode, fig_dir):
 def _table_A(d, metric_set, kind="ci"):
     methods = [m for m in A_ORDER if m in set(d.method)]
     metrics = [(c, lbl) for c, lbl in metric_set if c in d.columns]
+    stats = {(m, c): _stat(d[d.method == m][c], kind) for m in methods for c, _ in metrics}
+    # per-column directional shading (computed on the means, so identical for ci/sem)
+    colmap = {c: _shade([stats[(m, c)][0] for m in methods], _DIRECTION.get(c))
+              for c, _ in metrics}
     rows = []
-    for m in methods:
-        cells = [_cell(*_stat(d[d.method == m][c], kind)) for c, _ in metrics]
+    for i, m in enumerate(methods):
+        cells = [{"t": _cell(*stats[(m, c)]), "c": colmap[c][i]} for c, _ in metrics]
         rows.append({"m": LABELS.get(m, m), "cells": cells})
     return [lbl for _, lbl in metrics], rows
 
@@ -592,8 +678,13 @@ _FACET_TMPL = """
 <h2>Toxicity definition: <span style="color:#2e6f95">{{ src }}</span>{{ primary }}</h2>
 
 <h3>A &middot; Safety vs efficacy — all methods</h3>
-<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer. Dashed line = the τ toxicity ceiling (quantile {{ tau }} of candidate toxicity).</div>
+<div class="note">Each point a method (mean over lines × seeds, 95% CI bars). Up = more lethal, left = safer. Dashed line = the τ toxicity ceiling; the shaded green band left of it is the permissible region. Grey arrows show the per-round predicted-tox filter moving greedy→greedy·per-round·pred and EHVI→EHVI·per-round·pred leftward across the ceiling.</div>
 <div class="card">{{ tradeoff|safe }}</div>
+{% if consistency %}
+<h3>A &middot; Filter robustness across cell lines</h3>
+<div class="note">Per-line toxicity reduction from the per-round predicted-tox filter (greedy minus greedy·per-round·pred), paired under common random numbers. All-positive bars = the filter is safer than greedy in every line.</div>
+<div class="card">{{ consistency|safe }}</div>
+{% endif %}
 {% if safety_bar %}
 <h3>A &middot; Permissible vs over-threshold targets</h3>
 <div class="note">For each method, how many of the K nominees have TRUE toxicity below (permissible) vs above the τ ceiling. The naive/diversity baselines nominate many over-threshold (toxic) targets; the safety rules keep them permissible.</div>
@@ -626,24 +717,24 @@ _FACET_TMPL = """
 <div class="card">{{ final_k|safe }}</div>
 {% endif %}
 <h3>A &middot; Method table (main)</h3>
-<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants. Cells = mean ± 95% CI.</div>
+<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants. Cells = mean ± 95% CI. <b>Shading is directional</b>: <span style="background:#9FE0CD;padding:0 4px">green = better</span> → <span style="background:#F0B9C1;padding:0 4px">red = worse</span> per column (toxicity lower-is-better; #safe and permissible efficacy higher-is-better). Raw <i>Mean efficacy</i> is left unshaded — it rewards toxic picks and is read jointly with toxicity. The LaTeX export carries the same shading via <code>\\cellcolor</code> (needs <code>\\usepackage[table]{xcolor}</code>).</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in a_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in a_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex_std }}</code></pre></details></details></div>
 <h3>A &middot; Diagnostics</h3>
 <div class="note">Secondary / diagnostic quantities — # novel (unassayed) nominees, nominee hypervolume, and normalized Pareto recall. Cells = mean ± 95% CI.</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in ad_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in ad_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td{% if c.c %} style="background:#{{ c.c }}"{% endif %}>{{ c.t }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex_std }}</code></pre></details></details></div>
 {% if assayed_img %}
 <h3>A &middot; Assayed set — quality of the genes actually measured</h3>
@@ -867,6 +958,7 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
         block = Environment(loader=BaseLoader()).from_string(_FACET_TMPL).render(
             src=src, primary=" (primary)" if src == "contrast" else "", tau=tau,
             tradeoff=_tradeoff_points(dA, src, scatter, tau, tau_mode, fig_dir),
+            consistency=_consistency_strip(dA, src, fig_dir),
             safety_bar=_safety_bar(dA, src, fig_dir),
             admission=_admission_curve(scatter, src, tau, tau_mode, fig_dir),
             final_k=_final_k_bars(dA, src, fig_dir),
