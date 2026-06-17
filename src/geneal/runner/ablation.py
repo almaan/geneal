@@ -316,6 +316,10 @@ def evaluate(pick, eff, tox, membership, X=None, tox_ceiling=None):
         out["n_safe"] = int(np.sum(safe))
         # mean efficacy among PERMISSIBLE picks (below the safety ceiling)
         out["mean_efficacy_safe"] = float(np.mean(eff[pe[safe]])) if safe.any() else float("nan")
+        # USEFUL efficacy: mean over all K picks with toxic (non-permissible) picks
+        # scored 0 -- rewards being potent AND keeping the shortlist safe, so a few
+        # very-potent-but-toxic picks no longer inflate the score.
+        out["useful_efficacy"] = float(np.mean(np.where(safe, eff[pe], 0.0)))
     # nominee hypervolume in TRUE (efficacy, -toxicity) space vs a global reference
     # (efficacy/safety BALANCE -- the right readout when there is no hard threshold).
     from geneal.models.multiobjective import hypervolume2d
