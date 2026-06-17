@@ -85,10 +85,10 @@ B_BASE_SHORT = {"greedy": "greedy", "ehvi": "EHVI", "trunc_pred": "greedy·nom",
                 "greedy_safe": "greedy·RT", "ehvi_trunc": "EHVI·nom",
                 "ehvi_safe": "EHVI·RT"}
 
-_A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy"), ("mean_toxicity", "Mean toxicity"),
-                   ("useful_efficacy", "Realizable efficacy"), ("n_safe", "# safe (of K)")]
-_A_DIAG_METRICS = [("max_efficacy", "Max efficacy"), ("n_novel", "# novel (of K)"),
-                   ("hypervolume", "Hypervolume (eff,−tox)"),
+_A_MAIN_METRICS = [("mean_efficacy", "Mean efficacy↑"), ("mean_toxicity", "Mean toxicity↓"),
+                   ("useful_efficacy", "Realizable efficacy↑"), ("n_safe", "# safe (of K)↑")]
+_A_DIAG_METRICS = [("max_efficacy", "Max efficacy↑"), ("n_novel", "# novel (of K)↑"),
+                   ("hypervolume", "Hypervolume (eff,−tox)↑"),
                    ("pareto_recall_norm", "Pareto recall (norm)↑")]
 _B_METRICS = [("concentration", "Concentration↓"), ("robustness", "Robustness↑"),
               ("n_pathways", "Distinct pathways↑"), ("mean_efficacy", "Mean efficacy↑"),
@@ -163,22 +163,32 @@ def _tex(s):
     return s
 
 
+_REF_ROWCOLOR = "EAF2FB"   # reference-row (unmodified greedy/EHVI) background; needs [table]{xcolor}
+
+
 def _latex_table(row_header, cols, rows, caption, label):
-    """booktabs LaTeX tabular with the same data as an HTML table."""
-    out = [r"\begin{table}[t]", r"\centering", r"\caption{" + caption + "}",
-           r"\label{tab:" + label + "}",
+    """booktabs LaTeX tabular with the same data as an HTML table. Rows may carry
+    'biggroup' (double rule on change), 'group' (single rule on change) and
+    'highlight' (\\rowcolor reference row). Caption is placed at the BOTTOM."""
+    out = [r"\begin{table}[t]", r"\centering",
            r"\begin{tabular}{l" + "r" * len(cols) + "}", r"\toprule",
            _tex(row_header) + " & " + " & ".join(_tex(c) for c in cols) + r" \\",
            r"\midrule"]
-    prev_group = None
+    prev_group = prev_big = None
     for r in rows:
-        group = r.get("group")
-        if prev_group is not None and group is not None and group != prev_group:
-            out.append(r"\midrule")          # rule between method families (baseline/greedy/EHVI)
-        prev_group = group
+        group, big = r.get("group"), r.get("biggroup")
+        if prev_big is not None and big is not None and big != prev_big:
+            out.append(r"\midrule\midrule")        # double rule between sections (baseline/greedy/EHVI)
+        elif prev_group is not None and group is not None and group != prev_group:
+            out.append(r"\midrule")                # single rule between sub-groups (e.g. B bases)
+        prev_group, prev_big = group, big
         name = r.get("m") or r.get("label") or ""
-        out.append(_tex(name) + " & " + " & ".join(_tex(c) for c in r["cells"]) + r" \\")
-    out += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
+        line = _tex(name) + " & " + " & ".join(_tex(c) for c in r["cells"]) + r" \\"
+        if r.get("highlight"):
+            line = f"\\rowcolor[HTML]{{{_REF_ROWCOLOR}}} " + line
+        out.append(line)
+    out += [r"\bottomrule", r"\end{tabular}",
+            r"\caption{" + caption + "}", r"\label{tab:" + label + "}", r"\end{table}"]
     return "\n".join(out)
 
 
@@ -359,7 +369,9 @@ def _table_A(d, metric_set, kind="ci"):
     rows = []
     for m in methods:
         cells = [_cell(*_stat(d[d.method == m][c], kind)) for c, _ in metrics]
-        rows.append({"m": LABELS.get(m, m), "cells": cells, "group": _A_FAMILY.get(m)})
+        rows.append({"m": LABELS.get(m, m), "cells": cells,
+                     "biggroup": _A_FAMILY.get(m),                # double rule baseline|greedy|EHVI
+                     "highlight": m in ("greedy", "ehvi")})        # unmodified reference methods
     return [lbl for _, lbl in metrics], rows
 
 
@@ -518,8 +530,13 @@ def _b_table(d, ops, metrics, kind="ci"):
             if not len(g) or metrics[0][0] not in g.columns:
                 continue
             cells = [_cell(*_stat(g[c], kind)) for c, _ in metrics]
-            rows.append({"label": f"{B_BASE_SHORT.get(base, base)} + {OP_LABELS.get(op, op)}",
-                         "cells": cells, "group": base})   # \midrule between bases in LaTeX
+            base_lbl = B_BASE_SHORT.get(base, base)
+            # 'none' = the base alone; drop the "+ none" suffix for clarity
+            label = base_lbl if op == "none" else f"{base_lbl} + {OP_LABELS.get(op, op)}"
+            rows.append({"label": label, "cells": cells,
+                         "group": base,                       # single rule between bases
+                         "biggroup": _A_FAMILY.get(base),      # double rule greedy|EHVI section
+                         "highlight": op == "none" and base in ("greedy", "ehvi")})
     return cols, rows
 
 
@@ -698,24 +715,24 @@ _FACET_TMPL = """
 <div class="card">{{ final_k|safe }}</div>
 {% endif %}
 <h3>A &middot; Method table (main)</h3>
-<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants. Cells = mean ± 95% CI.</div>
+<div class="note">Rows grouped: baselines, then greedy variants, then EHVI variants. Cells = mean ± 95% CI. The unmodified reference methods (greedy, EHVI) are shaded. LaTeX export uses double rules between groups + <code>\\rowcolor</code> for the reference rows (needs <code>\\usepackage[table]{xcolor}</code>).</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in a_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in a_rows %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in a_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in a_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in a_rows_std %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ a_latex_std }}</code></pre></details></details></div>
 <h3>A &middot; Diagnostics</h3>
 <div class="note">Secondary / diagnostic quantities — # novel (unassayed) nominees, nominee hypervolume, and normalized Pareto recall. Cells = mean ± 95% CI.</div>
 <div class="card"><table>
 <thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in ad_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in ad_rows %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>method</th>{% for h in ad_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in ad_rows_std %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in ad_rows_std %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ ad_latex_std }}</code></pre></details></details></div>
 {% if assayed_img %}
 <h3>A &middot; Assayed set — quality of the genes actually measured</h3>
@@ -723,7 +740,7 @@ _FACET_TMPL = """
 <div class="card">{{ assayed_img|safe }}</div>
 <div class="card"><table>
 <thead><tr><th>acquisition</th>{% for h in asy_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in asy_rows %}<tr><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in asy_rows %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.m }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ asy_latex }}</code></pre></details></div>
 {% endif %}
 {% if rounds_nom %}
@@ -745,21 +762,21 @@ _FACET_TMPL = """
 <div class="note">Concentration / robustness / distinct-complexes measured over CORUM complexes; rows = bases × {none, k-DPP·CORUM}.</div>
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in b_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in b_rows %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in b_rows_sem %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in b_rows_sem %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex_sem }}</code></pre></details></details></div>
 <h4>B.2 &middot; STRING (network) diversity <span style="color:#2e6f95">[{{ src }}]</span></h4>
 <div class="note">Mean / max pairwise STRING similarity of the portfolio (↓ = more mechanistically spread); rows = bases × {none, k-DPP·STRING}.</div>
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in bs_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in bs_rows %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in bs_rows %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bs_latex }}</code></pre></details>
 <details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
 <table><thead><tr><th>base + operator</th>{% for h in bs_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
-<tbody>{% for r in bs_rows_sem %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+<tbody>{% for r in bs_rows_sem %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bs_latex_sem }}</code></pre></details></details></div>
 <div class="card">{{ b_bar|safe }}</div>
 <h3>B &middot; Efficacy vs concentration (CORUM) <span style="color:#2e6f95">[{{ src }} toxicity]</span></h3>
