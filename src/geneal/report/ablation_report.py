@@ -101,6 +101,34 @@ _B_STRING_METRICS = [("string_redundancy", "Mean pairwise STRING sim↓"),
 _B_CORUM_OPS = ["none", "kdpp_corum"]
 _B_STRING_OPS = ["none", "kdpp_string"]
 
+# Self-contained captions for the Section B (diversity/hedging) tables: spell out
+# every abbreviation so the table reads standalone. {src}=toxicity definition,
+# {spread}=dispersion shown.
+_B_CAP_COMMON = (
+    "Each row is a base nomination rule combined with a diversity operator. "
+    "Bases: \\emph{{greedy}} (top-$K$ predicted efficacy, no safety), "
+    "\\emph{{greedy$\\cdot$nom}} / \\emph{{EHVI$\\cdot$nom}} (greedy or EHVI acquisition with the "
+    "predicted-toxicity filter applied to the final shortlist only), and "
+    "\\emph{{greedy$\\cdot$RT}} / \\emph{{EHVI$\\cdot$RT}} (filter applied every round). "
+    "Operators: \\emph{{none}} = top-$K$ by quality; "
+    "\\emph{{k-DPP}} = a quality-weighted $k$-determinantal point process that trades a "
+    "little efficacy for mechanistic spread, using the {sim} similarity. "
+    "Cells are mean $\\pm$ {spread} over cell lines $\\times$ seeds; $K{{=}}30$ nominees, "
+    "{src} toxicity definition.")
+_B_CAP_CORUM = (
+    "Diversity / hedging over CORUM protein complexes ({src} toxicity). "
+    + _B_CAP_COMMON.replace("{sim}", "CORUM complex co-membership (Jaccard)")
+    + " \\emph{{Concentration}} $\\downarrow$ = fraction of the portfolio in its most "
+    "common complex; \\emph{{robustness}} $\\uparrow$ = value retained if a random "
+    "complex fails; \\emph{{distinct complexes}} $\\uparrow$; with mean efficacy and "
+    "mean toxicity of the nominated set.")
+_B_CAP_STRING = (
+    "Diversity / hedging over the STRING functional network ({src} toxicity). "
+    + _B_CAP_COMMON.replace("{sim}", "STRING combined-score network")
+    + " \\emph{{Mean / max pairwise STRING similarity}} $\\downarrow$ = how "
+    "functionally redundant the nominated set is (lower = more spread); with mean "
+    "efficacy and mean toxicity of the nominated set.")
+
 
 def _stat(x, kind="ci"):
     """(mean, spread). kind='ci' -> 95% CI half-width (1.96*sem); 'sem' -> standard
@@ -710,10 +738,10 @@ _FACET_TMPL = """
 <div class="card">{{ filter_timing|safe }}</div>
 {% endif %}
 
-<h3>B &middot; Diversity / robustness</h3>
+<h3>B &middot; Diversity / robustness <span style="color:#2e6f95">[{{ src }} toxicity]</span></h3>
 <div class="key">{{ headline_b|safe }}</div>
 <div class="note">Soft diversity (k-DPP) layered on the four safety-aware bases. Results split by external knowledge source: CORUM protein complexes vs the STRING network. The diversity operator (k-DPP·source) vs none is the comparison within each table.</div>
-<h4>B.1 &middot; CORUM (protein-complex) diversity</h4>
+<h4>B.1 &middot; CORUM (protein-complex) diversity <span style="color:#2e6f95">[{{ src }}]</span></h4>
 <div class="note">Concentration / robustness / distinct-complexes measured over CORUM complexes; rows = bases × {none, k-DPP·CORUM}.</div>
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
@@ -723,7 +751,7 @@ _FACET_TMPL = """
 <table><thead><tr><th>base + operator</th>{% for h in b_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in b_rows_sem %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ b_latex_sem }}</code></pre></details></details></div>
-<h4>B.2 &middot; STRING (network) diversity</h4>
+<h4>B.2 &middot; STRING (network) diversity <span style="color:#2e6f95">[{{ src }}]</span></h4>
 <div class="note">Mean / max pairwise STRING similarity of the portfolio (↓ = more mechanistically spread); rows = bases × {none, k-DPP·STRING}.</div>
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in bs_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
@@ -734,11 +762,11 @@ _FACET_TMPL = """
 <tbody>{% for r in bs_rows_sem %}<tr><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bs_latex_sem }}</code></pre></details></details></div>
 <div class="card">{{ b_bar|safe }}</div>
-<h3>B &middot; Efficacy vs concentration (CORUM)</h3>
+<h3>B &middot; Efficacy vs concentration (CORUM) <span style="color:#2e6f95">[{{ src }} toxicity]</span></h3>
 <div class="note">Each line a base; markers are operators (none / k-DPP·STRING / k-DPP·CORUM). Left = better hedged (lower CORUM concentration); high = efficacy retained.</div>
 <div class="card">{{ b_eff_conc|safe }}</div>
 {% if failure_sim %}
-<h3>B &middot; Value of diversity — pathway-failure simulation</h3>
+<h3>B &middot; Value of diversity — pathway-failure simulation <span style="color:#2e6f95">[{{ src }} toxicity]</span></h3>
 <div class="note">Portfolio value retained as the most-valuable pathways are eliminated one by one (a pathway proving non-viable). A diversified shortlist (cap / k-DPP) loses less than the concentrated baseline.</div>
 <div class="card">{{ failure_sim|safe }}</div>
 {% endif %}
@@ -952,14 +980,14 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             a_latex=_latex_table("method", a_cols, a_rows,
                                  f"Safety vs efficacy ({src} toxicity); cells are mean $\\pm$ 95\\% CI over cell lines $\\times$ seeds. \\emph{{Realizable efficacy}} (mean over the $K$ nominees of efficacy with each non-permissible nominee scored 0 -- equivalently the total efficacy of the safe picks divided by $K$) and \\emph{{\\# safe}} (count of the $K$ nominees with toxicity at or below the $\\tau$ ceiling) are defined only when a toxicity threshold is known, and quantify the threshold-known regime; \\emph{{mean efficacy}} and \\emph{{mean toxicity}} require no threshold.", f"A_{src}"),
             b_latex=_latex_table("base + operator", b_cols, b_rows,
-                                 f"Diversity -- CORUM complexes ({src} toxicity), mean $\\pm$ 95\\% CI.", f"Bcorum_{src}"),
+                                 _B_CAP_CORUM.format(src=src, spread="95\\% CI"), f"Bcorum_{src}"),
             bs_latex=_latex_table("base + operator", bs_cols, bs_rows,
-                                  f"Diversity -- STRING network ({src} toxicity), mean $\\pm$ 95\\% CI.", f"Bstring_{src}"),
+                                  _B_CAP_STRING.format(src=src, spread="95\\% CI"), f"Bstring_{src}"),
             b_rows_sem=b_rows_sem, bs_rows_sem=bs_rows_sem,
             b_latex_sem=_latex_table("base + operator", b_cols, b_rows_sem,
-                                     f"Diversity -- CORUM complexes ({src} toxicity), mean $\\pm$ sem.", f"Bcorum_{src}_sem"),
+                                     _B_CAP_CORUM.format(src=src, spread="sem"), f"Bcorum_{src}_sem"),
             bs_latex_sem=_latex_table("base + operator", bs_cols, bs_rows_sem,
-                                      f"Diversity -- STRING network ({src} toxicity), mean $\\pm$ sem.", f"Bstring_{src}_sem"),
+                                      _B_CAP_STRING.format(src=src, spread="sem"), f"Bstring_{src}_sem"),
             asy_latex=_latex_table("acquisition", asy_cols, asy_rows,
                                    f"Assayed-set quality ({src} toxicity).", f"assayed_{src}")
                        if asy_rows else "",
