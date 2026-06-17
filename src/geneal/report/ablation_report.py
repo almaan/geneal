@@ -491,7 +491,7 @@ def _b_table(d, ops, metrics, kind="ci"):
                 continue
             cells = [_cell(*_stat(g[c], kind)) for c, _ in metrics]
             rows.append({"label": f"{B_BASE_SHORT.get(base, base)} + {OP_LABELS.get(op, op)}",
-                         "cells": cells})
+                         "cells": cells, "group": base})   # \midrule between bases in LaTeX
     return cols, rows
 
 
