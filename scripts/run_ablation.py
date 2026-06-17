@@ -54,6 +54,25 @@ def _string_spread(sel, S):
     return dict(string_redundancy=float(pair.mean()), string_max_sim=float(pair.max()))
 
 
+def _oof_tox_pred(X, tox, seed, k=15):
+    """Out-of-fold (5-fold) predictions of toxicity from the embedding -- a
+    representation-quality probe answering 'can the embedding predict toxicity?'.
+    kNN-cosine = local-smoothness proxy for the GP surrogate the pipeline uses;
+    ridge = linear probe. Returns (knn_pred, ridge_pred), both length-n OOF."""
+    from sklearn.model_selection import KFold
+    from sklearn.neighbors import KNeighborsRegressor
+    from sklearn.linear_model import Ridge
+    from sklearn.preprocessing import normalize
+    X = np.asarray(X, float); tox = np.asarray(tox, float); n = len(tox)
+    Xn = normalize(X)                      # cosine kNN via L2-normalized Euclidean
+    knn = np.empty(n); lin = np.empty(n)
+    for tr, te in KFold(n_splits=5, shuffle=True, random_state=int(seed)).split(Xn):
+        knn[te] = KNeighborsRegressor(n_neighbors=min(k, len(tr))).fit(
+            Xn[tr], tox[tr]).predict(Xn[te])
+        lin[te] = Ridge(alpha=10.0).fit(X[tr], tox[tr]).predict(X[te])
+    return knn, lin
+
+
 def _pareto_recall(sel, eff, tox, pareto_set):
     """(n hit, recall, recall_norm): how many nominees lie on the TRUE (eff,-tox)
     Pareto front, the raw fraction of that front recovered, and the fraction of the
@@ -319,6 +338,9 @@ def main():
                     sc = pd.DataFrame({"efficacy": effa, "toxicity": toxa})
                     for label, pk in picks.items():
                         sc[f"pick_{label}"] = [i in pk for i in range(len(effa))]
+                    knn_pred, lin_pred = _oof_tox_pred(Xa, toxa, seed)   # embedding->tox probe
+                    sc["pred_toxicity"] = knn_pred
+                    sc["pred_toxicity_lin"] = lin_pred
                     sc["cell_line"] = cl; sc["tox_source"] = src
                     scatters.append(sc)
 

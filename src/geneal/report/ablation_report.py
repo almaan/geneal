@@ -690,6 +690,108 @@ _FACET_TMPL = """
 {% endif %}
 """
 
+def _r2(y, yh):
+    y = np.asarray(y, float); yh = np.asarray(yh, float)
+    ss = float(np.sum((y - y.mean()) ** 2))
+    return float(1 - np.sum((y - yh) ** 2) / ss) if ss > 0 else float("nan")
+
+
+def _joint_eff_tox(scatter, src, tau, tau_mode, fig_dir):
+    """Efficacy-vs-toxicity scatter with marginal histograms; Pearson r. Pooled
+    over all cell lines for one toxicity definition."""
+    if scatter is None or scatter.empty:
+        return None
+    d = scatter[scatter.tox_source == src] if "tox_source" in scatter.columns else scatter
+    if d.empty:
+        return None
+    tox = d["toxicity"].to_numpy(float); eff = d["efficacy"].to_numpy(float)
+    m = np.isfinite(tox) & np.isfinite(eff); tox, eff = tox[m], eff[m]
+    if len(tox) < 3:
+        return None
+    r = float(np.corrcoef(tox, eff)[0, 1])
+    ceil = _ceiling(scatter, src, tau, tau_mode)
+    fig = plt.figure(figsize=(5.6, 5.6))
+    gs = fig.add_gridspec(2, 2, width_ratios=(4, 1), height_ratios=(1, 4),
+                          wspace=0.04, hspace=0.04)
+    ax = fig.add_subplot(gs[1, 0])
+    axt = fig.add_subplot(gs[0, 0], sharex=ax)
+    axr = fig.add_subplot(gs[1, 1], sharey=ax)
+    ax.scatter(tox, eff, s=3, c="#7aa6c2", linewidths=0, alpha=0.45, rasterized=True)
+    if ceil is not None:
+        ax.axvline(ceil, ls="--", lw=1, color="#d1495b")
+        axt.axvline(ceil, ls="--", lw=1, color="#d1495b")
+    ax.set_xlabel(f"toxicity ({src})"); ax.set_ylabel("efficacy (target-line lethality)")
+    ax.annotate(f"Pearson r = {r:.2f}\nn = {len(tox):,}", xy=(0.04, 0.96),
+                xycoords="axes fraction", va="top", fontsize=9,
+                bbox=dict(boxstyle="round", fc="white", ec="#cccccc"))
+    axt.hist(tox, bins=60, color="#7aa6c2")
+    axr.hist(eff, bins=60, orientation="horizontal", color="#7aa6c2")
+    for a in (axt, axr):
+        a.axis("off")
+    _despine(ax)
+    return _emit(fig, fig_dir, f"ds_jointeff_{src}")
+
+
+def _embed_tox_fig(scatter, src, fig_dir):
+    """Predicted (5-fold OOF) vs true toxicity from the embedding: R^2 + Spearman.
+    kNN-cosine probe (GP-smoothness proxy); ridge R^2 reported alongside."""
+    if scatter is None or "pred_toxicity" not in getattr(scatter, "columns", []):
+        return None
+    d = scatter[scatter.tox_source == src] if "tox_source" in scatter.columns else scatter
+    if d.empty:
+        return None
+    from scipy.stats import spearmanr
+    t = d["toxicity"].to_numpy(float); p = d["pred_toxicity"].to_numpy(float)
+    m = np.isfinite(t) & np.isfinite(p); t, p = t[m], p[m]
+    if len(t) < 3:
+        return None
+    txt = f"kNN  R² = {_r2(t, p):.2f}\nSpearman ρ = {float(spearmanr(t, p).statistic):.2f}"
+    if "pred_toxicity_lin" in d.columns:
+        pl = d["pred_toxicity_lin"].to_numpy(float)[m]
+        txt += f"\nridge R² = {_r2(t, pl):.2f}"
+    fig, ax = plt.subplots(figsize=(5.0, 5.0))
+    ax.scatter(t, p, s=3, c="#7aa6c2", linewidths=0, alpha=0.45, rasterized=True)
+    lo = float(min(t.min(), p.min())); hi = float(max(t.max(), p.max()))
+    ax.plot([lo, hi], [lo, hi], ls="--", lw=1, color="#999999")
+    ax.set_xlabel(f"true toxicity ({src})")
+    ax.set_ylabel("predicted toxicity (5-fold OOF)")
+    ax.annotate(txt, xy=(0.04, 0.96), xycoords="axes fraction", va="top", fontsize=9,
+                bbox=dict(boxstyle="round", fc="white", ec="#cccccc"))
+    _despine(ax)
+    return _emit(fig, fig_dir, f"ds_embedtox_{src}")
+
+
+def _dataset_section(scatter, tau, tau_mode, tox_sources, fig_dir):
+    """Section 0: data characteristics — eff/tox coupling + embedding predictivity."""
+    if scatter is None or scatter.empty:
+        return ""
+    blocks = []
+    for src in tox_sources:
+        j = _joint_eff_tox(scatter, src, tau, tau_mode, fig_dir)
+        e = _embed_tox_fig(scatter, src, fig_dir)
+        if not j and not e:
+            continue
+        prim = " (primary)" if src == "contrast" else ""
+        blocks.append(
+            f'<h3>Toxicity definition: <span style="color:#2e6f95">{src}</span>{prim}</h3>'
+            '<div style="display:flex;gap:1.2rem;flex-wrap:wrap;align-items:flex-start">'
+            '<div style="flex:1;min-width:340px"><div class="note">Efficacy vs toxicity '
+            'over all candidate genes (pooled across lines), with marginal histograms. '
+            'Dashed = τ ceiling. Positive r ⇒ the most lethal knockouts also tend to be '
+            'toxic — the tension the safety rules must resolve.</div>'
+            f'<div class="card">{j or "—"}</div></div>'
+            '<div style="flex:1;min-width:320px"><div class="note">Can the embedding '
+            'predict toxicity? 5-fold out-of-fold kNN-cosine (a local-smoothness proxy '
+            'for the GP surrogate) + ridge (linear probe). Tight diagonal ⇒ embedding '
+            'carries toxicity signal; diffuse ⇒ representation is the bottleneck.</div>'
+            f'<div class="card">{e or "—"}</div></div></div>')
+    if not blocks:
+        return ""
+    return ('<h2>Dataset characteristics</h2>\n'
+            '<div class="note">General properties of the candidate space, before any '
+            'method is run.</div>\n' + "\n".join(blocks))
+
+
 _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <title>{{ title }}</title><style>
  body{font-family:Inter,'Helvetica Neue',Arial,sans-serif;color:#1f2933;margin:0;padding:2.6rem 3.2rem;background:#fbfcfd;line-height:1.6;max-width:1100px}
@@ -715,6 +817,8 @@ _TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 
 <h2>How to read this</h2>
 <div class="gloss">{{ glossary|safe }}</div>
+
+{% if dataset %}{{ dataset|safe }}{% endif %}
 
 {% for f in facets %}
 <div class="key">{{ f.headline_a|safe }}</div>
@@ -796,10 +900,11 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
             failure_sim=_failure_curve(dB, src, fig_dir))
         facets.append({"block": block, "headline_a": _headline_A(dA)})
 
+    dataset = _dataset_section(scatter, tau, tau_mode, tox_sources, fig_dir)
     html = Environment(loader=BaseLoader()).from_string(_TEMPLATE).render(
         title=title, meta=meta,
         n_lines=df.cell_line.nunique(), n_seeds=df.seed.nunique(),
-        glossary=_GLOSSARY, facets=facets)
+        glossary=_GLOSSARY, dataset=dataset, facets=facets)
     out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html)
     return out_path
