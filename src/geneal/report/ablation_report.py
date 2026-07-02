@@ -1153,14 +1153,22 @@ _FACET_TMPL = """
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in bc_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in bc_rows %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bc_latex }}</code></pre></details></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bc_latex }}</code></pre></details>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
+<table><thead><tr><th>base + operator</th>{% for h in bc_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in bc_rows_std %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bc_latex_std }}</code></pre></details></details></div>
 {% endif %}
 {% if bstr_rows %}
 <h4>B.2 &middot; Evaluated on held-out STRING <span style="color:#2e6f95">[{{ src }}]</span></h4>
 <div class="card"><table>
 <thead><tr><th>base + operator</th>{% for h in bstr_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
 <tbody>{% for r in bstr_rows %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
-</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bstr_latex }}</code></pre></details></div>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bstr_latex }}</code></pre></details>
+<details><summary style="cursor:pointer;color:#2e6f95;font-weight:600;margin:.4rem 0">▸ same table, mean ± SEM</summary>
+<table><thead><tr><th>base + operator</th>{% for h in bstr_cols %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+<tbody>{% for r in bstr_rows_std %}<tr{% if r.highlight %} style="background:#eaf2fb"{% endif %}><td>{{ r.label }}</td>{% for c in r.cells %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table><details class="tex"><summary>LaTeX</summary><pre><code>{{ bstr_latex_std }}</code></pre></details></details></div>
 {% endif %}
 {% if barplot %}
 <h4>B.3 &middot; Mechanism diversity — genes per CORUM complex <span style="color:#2e6f95">[{{ src }}]</span></h4>
@@ -1406,6 +1414,10 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
         # diversity metrics + R/N_eff evaluated on CORUM and (held-out) STRING.
         bc_cols, bc_rows = _b_table(dB_eff, _B_HEDGE_OPS, _B_EVAL_CORUM)     # eval on CORUM
         bstr_cols, bstr_rows = _b_table(dB_eff, _B_HEDGE_OPS, _B_EVAL_STRING)  # eval on STRING
+        # SEM variants (mean ± std/sqrt(n)) mirroring Section A's SEM dropdown; the
+        # manuscript Table 2 caption reports SEM, so Section B needs it too.
+        _, bc_rows_std = _b_table(dB_eff, _B_HEDGE_OPS, _B_EVAL_CORUM, "sem")
+        _, bstr_rows_std = _b_table(dB_eff, _B_HEDGE_OPS, _B_EVAL_STRING, "sem")
         auc_cols, auc_rows = _auc_hv_table(rounds, src)                   # AUC-HV (separate table)
         assayed_img, (asy_cols, asy_rows) = _assayed_panel(assayed, src, fig_dir)
         rounds_nom, rounds_assayed = _round_curves(rounds, src, fig_dir)
@@ -1435,17 +1447,28 @@ def build_ablation_report(df: pd.DataFrame, out_path, scatter=None, meta=None,
                                       f"Adiag_{src}_sem"),
             headline_b=_headline_B(dB_eff),
             bc_cols=bc_cols, bc_rows=bc_rows, bstr_cols=bstr_cols, bstr_rows=bstr_rows,
+            bc_rows_std=bc_rows_std, bstr_rows_std=bstr_rows_std,
             bc_latex=_latex_table("base + op", _B_SHORT_COLS, bc_rows,
                                   f"Section B, evaluated on CORUM ({src} non-target population): "
                                   f"diversity + portfolio risk (R $\\downarrow$, $N_{{eff}}\\uparrow$) "
                                   f"of the k-DPP$\\cdot$CORUM hedge vs none. "
                                   f"Conc.=concentration, Robust.=robustness, Avg. Units=distinct "
                                   f"units covered, T./NT. Eff.=target/non-target efficacy, "
-                                  f"Neff=effective independent bets.", f"Bcorum_{src}") if bc_rows else "",
+                                  f"Neff=effective independent bets. Cells mean $\\pm$ 95\\% CI.",
+                                  f"Bcorum_{src}") if bc_rows else "",
+            bc_latex_std=_latex_table("base + op", _B_SHORT_COLS, bc_rows_std,
+                                      f"Section B, evaluated on CORUM ({src} non-target population): "
+                                      f"same as above, cells mean $\\pm$ SEM (std/$\\sqrt{{n}}$) over "
+                                      f"cell lines $\\times$ seeds.", f"Bcorum_{src}_sem") if bc_rows_std else "",
             bstr_latex=_latex_table("base + op", _B_SHORT_COLS, bstr_rows,
                                     f"Section B, evaluated on held-out STRING ({src} non-target "
                                     f"population): same columns; the hedge selects on CORUM, so gains "
-                                    f"here show generalization.", f"Bstring_{src}") if bstr_rows else "",
+                                    f"here show generalization. Cells mean $\\pm$ 95\\% CI.",
+                                    f"Bstring_{src}") if bstr_rows else "",
+            bstr_latex_std=_latex_table("base + op", _B_SHORT_COLS, bstr_rows_std,
+                                        f"Section B, evaluated on held-out STRING ({src} non-target "
+                                        f"population): same as above, cells mean $\\pm$ SEM "
+                                        f"(std/$\\sqrt{{n}}$).", f"Bstring_{src}_sem") if bstr_rows_std else "",
             barplot=_diversity_barplot(group_counts, src, fig_dir),
             auc_cols=auc_cols, auc_rows=auc_rows, hv_curve=_hv_round_curve(rounds, src, fig_dir),
             auc_latex=_latex_table("method", auc_cols, auc_rows,
