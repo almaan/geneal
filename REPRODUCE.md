@@ -1,99 +1,103 @@
-# Reproducing geneal
+# Reproducing the MLCB analysis
 
-Every stage is deterministic (explicit seeds, pinned params/models). Run stages
-via `make <target>` (see `Makefile`) or the scripts directly. Data + embedding
-artifacts land in `data/` (gitignored); experiment outputs + reports in `res/`
-(gitignored). Result notes are tracked in `data/*.md`.
+Minimal pipeline to reproduce **Table 1** (selectivity), **Table 2** (CORUM
+hedging), **Table A.2** (STRING hedging) and the HTML report for
+*"Nominating Selective and Diverse Targets: Multi-Objective Active Learning and
+Portfolio Hedging."*
 
-## Environments
+Everything is deterministic given the seeds/params below, with one documented
+exception (the joint-GP note at the end). Data + outputs are gitignored (`data/`,
+`res/`).
 
-- **`geneal`** (main): torch 2.11, gpytorch, pyro, scikit-learn, plotly, jinja2,
-  sentence-transformers, mygene, requests. `micromamba run -n geneal <cmd>`.
-- **`scprint`** (separate, REQUIRED only for scPRINT embeddings): scPRINT pins an
-  older torch that conflicts with `geneal`. Create:
-  `micromamba create -y -n scprint -c conda-forge python=3.11 && micromamba run -n scprint pip install scprint`.
-- **GPU**: ESM2 embedding auto-uses CUDA if present (verified on a B200). Everything
-  else is CPU-fine.
+## 1. Environment
 
-## Architecture: genome-wide embedding caches, panel = row-subset
+```bash
+micromamba create -y -n geneal -c conda-forge python=3.11
+micromamba run -n geneal pip install -e ".[dev]"      # torch, gpytorch, sklearn, jinja2, mygene, networkx
+```
+Run anything with `micromamba run -n geneal <cmd>`. CPU is sufficient.
 
-Embeddings are computed **once over all ~18.5k DepMap genes** (Entrez-indexed) and
-cached. A "panel" (e.g. the 2043-gene HVG demo set, or 5116-gene set) is just a
-**row-subset** of a cache — selected at experiment time via `--panel <entrez-file>`.
-**Resizing the panel never re-embeds.** Genome-wide caches:
-`pubmedbert_all.parquet`, `esm2_650m_all.parquet`, scPRINT (44k-gene native weight),
-and STRING/CORUM edge-list + membership tables. **Co-dependency is NOT used** (it is
-label-adjacent — derived from the effect matrix — so not a deployable prior; it was
-only a diagnostic probe). Build all caches with `make pubmedbert-all esm2-all graphs-all`;
-demo subsets (`pubmedbert_hvg` etc.) are kept for quick runs.
+## 2. Inputs (place under `data/`)
 
-## Pipeline order
+| file | source |
+|---|---|
+| `data/processed/depmap/gene_effect.parquet` | DepMap Public **25Q3** `CRISPRGeneEffect` (genes × cell lines, Chronos), row index `"SYMBOL (Entrez)"`. Download the CSV from depmap.org and save as parquet. |
+| `data/corum_dl/humanComplexes.txt` | CORUM (mammalian protein complexes). |
+| `data/string_dl/` | STRING human `protein.links` + `protein.aliases`. |
 
-| stage | make target | script | output |
-|---|---|---|---|
-| 1. DepMap data | (manual, see below) | download + curate | `data/processed/depmap/gene_effect.parquet` |
-| 2. Gene panel | `make panel` | `select_gene_panel.py` | `panel_hvg.txt` (2043 genes, deterministic) |
-| 3. UniProt map | `make uniprot` | `map_genes_to_uniprot.py` | `uniprot_map_hvg.parquet` |
-| 4a. ESM2 emb | `make esm2-emb` | `precompute_esm2.py` (GPU) | `esm2_650m_hvg.parquet` |
-| 4b. PubMedBERT emb | `make pubmedbert-emb` | `embed_pubmedbert.py` | `pubmedbert_hvg.parquet` |
-| 4c. scPRINT emb | `make scprint-emb` | `extract_scprint_gene_emb.py` (scprint env) | `scprint_hvg.parquet` |
-| 5. Diagnostics | `make diagnostics` / `make multiline` | `diagnose_embeddings.py` / `diagnose_multiline.py` | redundancy ratio, R² tables |
-| 6. Graph validation | `make string` / `make corum` | `validate_string.py` / `validate_corum.py` | redundancy ratios |
-| 7. Risk nomination | `make risk` | `run_risk_nomination.py` | `res/runs_risk/<ts>/report.html` |
-| 7b. Large sweep | `make risk-large` | `launch_risk_sweep.sh` | sharded combined report |
-| 8. Dual/selectivity | `make dual` | `run_dual_experiment.py` | report |
-| **9. DEFAULT ablation** | **`make ablation`** | **`run_ablation.py`** | **`res/runs_ablation/<ts>/report.html`** |
+## 3. Build caches
 
-### Default output — the two-analysis ablation (stage 9)
+```bash
+# CORUM + STRING edge lists and CORUM membership
+micromamba run -n geneal python scripts/build_graph_caches.py
 
-`make ablation` (or `sbatch jobs/ablation.sh`) is the **standing default report**.
-It runs the full active-learning loop (8 rounds × batch 10) for every method and
-produces ONE report with two deliberately-separate analyses:
+# gene list = ALL DepMap genes (genome-wide; no panel subsetting)
+micromamba run -n geneal python -c "from geneal.data.depmap import load_gene_effect,parse_entrez; ge=load_gene_effect('data/processed/depmap/gene_effect.parquet'); open('data/processed/depmap/all_genes.txt','w').write('\n'.join(str(parse_entrez(g)) for g in ge.index))"
 
-- **A — safety vs efficacy.** One axis (the safety rule): `none` (naive greedy) →
-  `truncation` (known-toxicity ceiling) → `ehvi` (dual-objective EHVI acquisition,
-  learned-toxicity ceiling), plus `random`/`coreset`/`typiclust` baselines. All six
-  plotted on the efficacy–toxicity tradeoff (method-points + per-gene cloud).
-- **B — diversity / robustness.** The operators `none`/`cap` (CORUM per-pathway)/
-  `kdpp` (STRING-similarity k-DPP) layered on two bases (`greedy` and the winning
-  safety rule from A). Capping is a bolt-on-any-method hedge.
+# PubMedBERT text embeddings (mygene.info annotations -> NeuML/pubmedbert-base-embeddings)
+micromamba run -n geneal python scripts/embed_pubmedbert.py \
+  --panel data/processed/depmap/all_genes.txt \
+  --out   data/processed/embeddings/pubmedbert_all.parquet
+```
 
-**Representations:** PubMedBERT embeddings predict efficacy/toxicity; CORUM gives
-pathway membership (capping/concentration); STRING gives the k-DPP similarity `S`.
-STRING is a *similarity*, never a prediction embedding. Default scale: 5k panel, 6
-lines, 3 seeds. Full genome: `make ablation-fullgenome` (or
-`sbatch --export=ALL,PANEL= jobs/ablation.sh`).
+## 4. Run the analysis (genome-wide, joint multitask GP)
 
-### Stage 1 — DepMap data (one-time)
-The DepMap 26Q1 CRISPRGeneEffect + Model are fetched from the portal download
-manifest (`https://depmap.org/portal/api/download/files`, pre-signed GCS links,
-no auth; links expire — re-fetch manifest to re-download). Curated transposed to
-genes×cell_lines at `data/processed/depmap/gene_effect.parquet`. See
-`data/DATA_STATUS.md` for the exact recon.
+**SLURM (sharded: one job per target line + dependent aggregation):**
+```bash
+CONTRASTS=3 CONTRAST_IDS="ACH-002462 ACH-001310 ACH-000133" JOINT=1 SEEDS="0 1" \
+  PANEL_A=none PANEL_B=none TAG=mlcb \
+  bash scripts/launch_ablation_sweep.sh 12
+# -> res/runs_ablation/sweep_mlcb_<ts>/report.html
+```
 
-### Stage 4c — scPRINT (separate env)
-Weights: HuggingFace `jkobject/scPRINT` `medium-v1.5.ckpt` (no auth). Needs the
-Entrez→Ensembl map `data/processed/depmap/entrez_ensembl.parquet` (built via
-`mygene` during the PubMedBERT/scPRINT prep). See `data/SCPRINT_VERIFY.md`.
+**Single process (no SLURM):**
+```bash
+micromamba run -n geneal python scripts/run_ablation.py \
+  --panel-a none --panel-b none --joint-gp \
+  --n-cell-lines 12 --contrast-lines ACH-002462 ACH-001310 ACH-000133 \
+  --seeds 0 1 --K 30 --n-initial 40 --n-rounds 8 --batch 10 --tau 0.5
+```
 
-## Reports
+Report → manuscript mapping:
+- **Section A** table → **Table 1**
+- **Section B.1** (evaluated on CORUM) → **Table 2**
+- **Section B.2** (evaluated on held-out STRING) → **Table A.2**
 
-The headline experiment (`make risk`) writes a detailed self-contained HTML to
-`res/runs_risk/<run>/report.html`: efficacy–risk Pareto, per-metric error-bar
-curves, mean±95%CI tables, and a per-cell-line breakdown. Regenerate a report
-from any saved run parquet:
-`micromamba run -n geneal python -m geneal.report.risk_report <run>/risk.parquet <run>/report.html`
+Fixed config: 12 target lines (top-12 fewest-NaN), 3 non-cancerous contrast lines,
+2 seeds, K=30 nominees, 40 seed genes, 8 rounds × 10 genes (120 assayed),
+τ=0.5 (absolute Chronos scale), joint multitask GP. Results pool over
+12 × 2 × 3 = 72 settings.
 
-## Seeds / determinism
+`--analyses {both,a,b}` runs Section A only, Section B only, or both.
 
-All RNG is explicit `numpy.random.default_rng(seed)`; experiment seeds are the
-`--seeds` arg (Makefile default `0 1 2 3`). The Runner uses common random numbers
-(shared init set + noise per seed across methods). Same seeds + same inputs →
-identical outputs (verified: `tests/test_runner.py::test_runner_is_deterministic`,
-cross-process repro test).
+## 5. (Optional) merge a separate A run with a separate B run
 
-## Key result docs (tracked)
-- `data/EMBEDDING_DIAGNOSTICS.md` — FM embeddings (ESM2/scPRINT/PubMedBERT) + STRING/CORUM all lack outcome-redundancy; co-dependency works.
-- `data/RISK_NOMINATION_RESULTS.md` — greedy concentration risk vs per-pathway-cap hedge frontier.
-- `data/STRING_VALIDATION.md`, `data/CORUM_VALIDATION.md` — graph-prior validation.
-- `docs/superpowers/plans/` — all implementation plans; `docs/superpowers/specs/` — the design + moat.
+Only if Section A and Section B were run in different jobs:
+```bash
+micromamba run -n geneal python scripts/merge_ab_report.py \
+  --a-run <A_run_dir> --b-run <B_run_dir> --out <merged_dir>
+```
+
+## Notes
+
+- **Reproducibility caveat:** the joint multitask GP (`MultiTaskGPR`) initializes
+  its task-covariance from torch's global RNG, which the pipeline does not seed, so
+  the joint-GP methods (EHVI and all filtered variants) vary slightly run-to-run.
+  Seed torch inside `MultiTaskGPR.fit` for exact reproduction. Single-task methods
+  (greedy / random / cluster / info-diverse) are fully deterministic.
+- Tests: `micromamba run -n geneal pytest`.
+
+## Components
+
+```
+scripts/build_graph_caches.py     CORUM + STRING caches
+scripts/embed_pubmedbert.py       PubMedBERT gene embeddings
+scripts/run_ablation.py           the analysis engine (Sections A + B)
+scripts/aggregate_ablation.py     concatenate shards -> combined report
+scripts/merge_ab_report.py        stitch a separate A run + B run
+scripts/launch_ablation_sweep.sh  SLURM sweep launcher
+jobs/ablation_shard.sh            per-line array task
+jobs/ablation_aggregate.sh        dependent aggregation job
+src/geneal/                       importable library (surrogate, acquisition,
+                                  nomination, metrics, report)
+```
