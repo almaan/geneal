@@ -34,3 +34,36 @@ def test_dropout_robustness_counts_survivors():
     # pathways A(3),B(1),C(1); total value 5; drop A->lose3, B->lose1, C->lose1
     # expected surviving fraction = 1 - mean(3/5,1/5,1/5) = 1 - (5/15)=1-0.333=0.667
     assert np.isclose(r, 0.667, atol=1e-2)
+
+
+def test_portfolio_risk_concentrated_vs_diverse():
+    from geneal.metrics.portfolio import portfolio_risk
+    # 3 picks. Concentrated: all mutually similar (S=1 off-diag).
+    Sc = np.ones((3, 3))
+    # equal-weight variance w^T S w, w=1/3 -> all-ones -> 1.0
+    assert np.isclose(portfolio_risk([0, 1, 2], Sc), 1.0)
+    # Diverse: orthogonal (identity) -> 1/K floor = 1/3
+    Sd = np.eye(3)
+    assert np.isclose(portfolio_risk([0, 1, 2], Sd), 1 / 3)
+    # Partial: one similar pair among three -> between floor and 1
+    Sp = np.eye(4)
+    Sp[0, 1] = Sp[1, 0] = 1.0
+    r = portfolio_risk([0, 1, 2], Sp)        # picks 0,1 similar; 2 idiosyncratic
+    # 1/3 + (1/9)*sum_offdiag(=2) = 1/3 + 2/9
+    assert np.isclose(r, 1 / 3 + 2 / 9)
+
+
+def test_portfolio_risk_subsets_by_picks():
+    from geneal.metrics.portfolio import portfolio_risk
+    S = np.eye(5)
+    S[3, 4] = S[4, 3] = 1.0
+    # picking the idiosyncratic 0,1,2 -> floor 1/3 regardless of the 3-4 pair
+    assert np.isclose(portfolio_risk([0, 1, 2], S), 1 / 3)
+
+
+def test_effective_bets_range():
+    from geneal.metrics.portfolio import effective_bets
+    # fully diverse (identity) -> K independent bets
+    assert np.isclose(effective_bets([0, 1, 2], np.eye(3)), 3.0)
+    # fully concentrated (all-ones) -> 1 effective bet
+    assert np.isclose(effective_bets([0, 1, 2], np.ones((3, 3))), 1.0)

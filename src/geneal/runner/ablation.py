@@ -27,7 +27,8 @@ from geneal.models.hedged_selection import HedgedSelect
 from geneal.models.selection import CoreSet, TypiClust
 from geneal.runner.bivariate import BivariateALRunner
 from geneal.metrics.portfolio import (pathway_concentration, dropout_robustness,
-                                      n_pathways_covered)
+                                      n_pathways_covered, portfolio_risk,
+                                      effective_bets)
 
 # Generic names for representative prior-work acquisitions (not exact
 # reimplementations):
@@ -222,8 +223,8 @@ def _tox_threshold(tox_values, tau, tau_mode):
 
 
 def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
-             S=None, surr_factory=None, cap=2, pool=200, joint_factory=None,
-             tau_mode="absolute"):
+             S=None, S_builder=None, surr_factory=None, cap=2, pool=200,
+             joint_factory=None, tau_mode="absolute", quality="eff"):
     """Nominate K targets. Fit a final efficacy GP on revealed labels, predict
     genome-wide; apply the safety filter; then the diversity operator over the
     top-`pool` eligible candidates (none=top-K, cap=per-pathway, kdpp=k-DPP on S).
@@ -237,7 +238,16 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
                  and the EHVI method.
     `tau` is a QUANTILE in [0,1] (scale-free, comparable across toxicity
     definitions): keep genes whose toxicity is at/below the tau-quantile of the
-    relevant toxicity distribution (tau=0.5 = 'the safest half')."""
+    relevant toxicity distribution (tau=0.5 = 'the safest half').
+
+    `quality` selects the scalar the diversity operator ranks/temper-weights by,
+    AFTER the safety filter (eligibility) is applied:
+      'eff' -> predicted target-population efficacy (default; the historical q).
+      'sel' -> predicted selectivity = predicted target-population efficacy minus
+               predicted non-target-population efficacy (the old `eff - tox`).
+    Both reuse the same final fitted predictions, so 'sel' adds only one extra
+    selection pass (and a toxicity GP fit only when safety='none'/'known' did not
+    already predict toxicity)."""
     surr_factory = surr_factory or _default_factory
     X = np.asarray(X, float)
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
@@ -255,24 +265,39 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
             m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0])
         return _pareto_select(m_eff, m_tox, K, pool)
 
+    m_tox = None   # predicted non-target-population efficacy, when available
     if safety == "pred" and joint_factory is not None:
         # joint (multitask) GP: efficacy + toxicity share strength. q (efficacy)
         # and the toxicity filter both come from the one correlated fit.
         m2 = np.asarray(joint_factory().fit(
             X[revealed], np.column_stack([eff[revealed], tox[revealed]])).predict(X)[0])
-        q = m2[:, 0].astype(float).copy()
-        m_tox = m2[:, 1]
+        m_eff = m2[:, 0].astype(float)
+        m_tox = m2[:, 1].astype(float)
+        q = m_eff.copy()
         q[m_tox > _tox_threshold(m_tox, tau, tau_mode)] = _NEG
     else:
-        q = np.asarray(surr_factory().fit(X[revealed], eff[revealed]).predict(X)[0],
-                       dtype=float).copy()
+        m_eff = np.asarray(surr_factory().fit(X[revealed], eff[revealed]).predict(X)[0],
+                           dtype=float)
+        q = m_eff.copy()
         if safety == "known":
             q[tox > _tox_threshold(tox, tau, tau_mode)] = _NEG
         elif safety == "pred":
-            m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0])
+            m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0],
+                               dtype=float)
             q[m_tox > _tox_threshold(m_tox, tau, tau_mode)] = _NEG
         elif safety != "none":
             raise ValueError(f"unknown safety {safety!r}")
+
+    # quality variant: rank/temper by predicted SELECTIVITY (eff - tox) instead of
+    # efficacy, keeping the same eligibility (filtered genes stay at _NEG).
+    if quality == "sel":
+        if m_tox is None:   # safety none/known didn't predict toxicity -> fit it now
+            m_tox = np.asarray(surr_factory().fit(X[revealed], tox[revealed]).predict(X)[0],
+                               dtype=float)
+        eligible_mask = q > _NEG / 2
+        q = np.where(eligible_mask, m_eff - m_tox, _NEG)
+    elif quality != "eff":
+        raise ValueError(f"unknown quality {quality!r}")
 
     # restrict the diversity operator to the top-`pool` eligible by quality:
     # bounds k-DPP cost (O(K^2 pool)) and diversifies only among high-efficacy genes.
@@ -281,7 +306,18 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
     order = np.argsort(q)[::-1][:pool_n]
     qp = q[order]
     memp = {li: membership.get(int(order[li]), set()) for li in range(len(order))}
-    Sp = S[np.ix_(order, order)] if (S is not None and diversity == "kdpp") else None
+    # k-DPP similarity over the top-`pool` eligible genes only. Prefer S_builder
+    # (builds the (pool,pool) submatrix directly, O(pool^2) memory); fall back to
+    # slicing a pre-built full matrix. Both give the identical submatrix.
+    if diversity == "kdpp":
+        if S_builder is not None:
+            Sp = S_builder([int(i) for i in order])
+        elif S is not None:
+            Sp = S[np.ix_(order, order)]
+        else:
+            Sp = None
+    else:
+        Sp = None
 
     mode = _DIV_MODE[diversity]
     local = HedgedSelect(mode=mode, cap=cap).select_idx(qp, memp, K=K, S=Sp)
@@ -291,11 +327,24 @@ def nominate(revealed, X, eff, tox, membership, K, safety, diversity, tau,
 # --------------------------------------------------------------------------- #
 # Evaluate (true-value metrics for a nominated portfolio)                      #
 # --------------------------------------------------------------------------- #
-def evaluate(pick, eff, tox, membership, X=None, tox_ceiling=None):
+def evaluate(pick, eff, tox, membership, X=None, tox_ceiling=None, risk_S=None,
+             membership_string=None):
     """TRUE-value metrics for a nominated set. eff/tox are ground truth. If
     `tox_ceiling` is given, also count nominees whose TRUE toxicity is at/below
     (safe) vs above (toxic) the ceiling -- a direct count of how many of the K
-    picks are actually tolerable. (X is accepted for API compatibility; unused.)"""
+    picks are actually tolerable. (X is accepted for API compatibility; unused.)
+
+    `risk_S`: optional dict {source -> (N,N) similarity matrix} (e.g.
+    {'corum': S_corum, 'string': S_string}). For each source, adds two
+    portfolio-risk readouts of the picked set: `risk_<src>` = equal-weight
+    portfolio variance wᵀSw (lower = better hedged) and `neff_<src>` = effective
+    number of independent bets K²/1ᵀS1.
+
+    `membership_string`: optional gene->{module} dict (STRING discrete modules).
+    When given, the discrete diversity metrics (concentration, robustness,
+    distinct groups) are ALSO computed on STRING -> `*_string` keys, so the same
+    columns can be reported evaluated on CORUM (the hedge graph) and on STRING
+    (held-out). Tests whether the CORUM hedge generalizes."""
     eff = np.asarray(eff, float); tox = np.asarray(tox, float)
     pick = list(pick)
     out = {
@@ -309,6 +358,26 @@ def evaluate(pick, eff, tox, membership, X=None, tox_ceiling=None):
         "robustness": float(dropout_robustness(pick, membership, np.clip(eff, 0.0, None))),
         "n_pathways": int(n_pathways_covered(pick, membership)),
     }
+    if membership_string is not None:
+        out["concentration_string"] = float(pathway_concentration(pick, membership_string))
+        out["robustness_string"] = float(dropout_robustness(
+            pick, membership_string, np.clip(eff, 0.0, None)))
+        out["n_pathways_string"] = int(n_pathways_covered(pick, membership_string))
+    if risk_S:
+        for src, S in risk_S.items():
+            if callable(S):
+                # S(pick) returns the (K,K) picks submatrix directly (memory-
+                # efficient path). Equivalent to portfolio_risk/effective_bets on
+                # the full matrix sliced to the picks.
+                sub = np.asarray(S(pick), float)
+                Kp = len(pick)
+                w = np.full(Kp, 1.0 / Kp) if Kp else np.zeros(0)
+                out[f"risk_{src}"] = float(w @ sub @ w) if Kp else 0.0
+                denom = float(sub.sum())
+                out[f"neff_{src}"] = float(Kp * Kp / denom) if denom > 0 else float(Kp)
+            else:
+                out[f"risk_{src}"] = float(portfolio_risk(pick, S))
+                out[f"neff_{src}"] = float(effective_bets(pick, S))
     if tox_ceiling is not None:
         pe = np.asarray(pick)
         safe = tox[pe] <= tox_ceiling
@@ -351,6 +420,145 @@ def build_embedding_S(X):
     np.fill_diagonal(S, 1.0)
     return S
 
+
+# --------------------------------------------------------------------------- #
+# SUBSET similarity builders (memory-efficient path)                           #
+#                                                                              #
+# The k-DPP only ever touches the top-`pool` (~200) eligible submatrix and the #
+# risk/Neff metrics only the K (~30) picks. Building the full (n,n) matrix and #
+# slicing it wastes O(n^2) memory (~8 GB at genome scale). Because embedding    #
+# cosine, CORUM Jaccard, and STRING edge weight are all PAIRWISE, the submatrix #
+# of the full matrix EQUALS the matrix built on the subset: build_*(X)[ix,ix]  #
+# == sub_*(X, ix), exactly. These builders return that submatrix directly.      #
+# --------------------------------------------------------------------------- #
+def sub_embedding_S(X, idx):
+    """(m,m) embedding-cosine similarity over global rows `idx`. Equals
+    build_embedding_S(X)[np.ix_(idx, idx)] exactly."""
+    Xs = np.asarray(X, float)[np.asarray(idx, int)]
+    nrm = np.linalg.norm(Xs, axis=1, keepdims=True)
+    Xn = Xs / np.clip(nrm, 1e-12, None)
+    S = 0.5 * (1.0 + np.clip(Xn @ Xn.T, -1.0, 1.0))
+    np.fill_diagonal(S, 1.0)
+    return S
+
+
+def sub_corum_S(membership, idx):
+    """(m,m) CORUM Jaccard similarity over global genes `idx`. Equals
+    build_corum_S(membership, n)[np.ix_(idx, idx)] exactly."""
+    ms = [membership.get(int(i), set()) for i in idx]
+    m = len(ms)
+    S = np.eye(m, dtype=float)
+    for a in range(m):
+        sa = ms[a]
+        if not sa:
+            continue
+        for b in range(a + 1, m):
+            sb = ms[b]
+            if not sb:
+                continue
+            u = len(sa | sb)
+            if u:
+                v = len(sa & sb) / u
+                if v:
+                    S[a, b] = S[b, a] = v
+    return S
+
+
+def string_adjacency(gene_names,
+                     edges_path="data/processed/depmap/string_edges_all.parquet"):
+    """Sparse STRING adjacency keyed by POSITION in `gene_names`: {i: {j: w}}.
+    Loads the genome-wide edge list once (~1e6 edges) without ever materializing
+    the dense (n,n) matrix. Feeds sub_string_S and build_string_membership."""
+    from geneal.data.depmap import parse_entrez
+    ents = [parse_entrez(g) for g in gene_names]
+    pos = {int(e): i for i, e in enumerate(ents) if e is not None}
+    adj: dict = {}
+    if not Path(edges_path).exists():
+        return adj
+    import pandas as pd
+    e = pd.read_parquet(edges_path)
+    a = e["entrez_i"].to_numpy(); b = e["entrez_j"].to_numpy()
+    w = e["weight"].to_numpy(dtype=float)
+    for ei, ej, wij in zip(a, b, w):
+        i = pos.get(int(ei)); j = pos.get(int(ej))
+        if i is None or j is None:
+            continue
+        adj.setdefault(i, {})[j] = wij
+        adj.setdefault(j, {})[i] = wij
+    return adj
+
+
+def sub_string_S(adj, idx):
+    """(m,m) STRING combined-score similarity over global genes `idx`, from the
+    sparse adjacency. Equals build_string_S(...)[np.ix_(idx, idx)] exactly."""
+    idx = [int(i) for i in idx]
+    loc = {g: k for k, g in enumerate(idx)}
+    m = len(idx)
+    S = np.eye(m, dtype=float)
+    for k, g in enumerate(idx):
+        for j, wij in adj.get(g, {}).items():
+            kk = loc.get(j)
+            if kk is not None:
+                S[k, kk] = wij
+    return S
+
+
+
+def build_string_membership(S_string=None, thresh: float = 0.7, adj=None,
+                            n=None, cache_path=None):
+    """Discrete STRING 'modules' for the diversity metrics: greedy-modularity
+    communities of the STRING graph thresholded at `thresh` (combined score in
+    [0,1]). Connected components are NOT used — the STRING network is dense and
+    chains into one giant component at any threshold; modularity communities give
+    balanced co-functional modules instead. Returns gene_idx -> {module_id}; genes
+    in singleton communities get an empty set (unannotated, mirroring CORUM). Lets
+    concentration / robustness / distinct-group metrics be computed on STRING the
+    same way as on CORUM complexes.
+
+    Graph source (equivalent partition either way):
+      `adj` (sparse {i: {j: w}}, from string_adjacency) + `n` -> genome-safe path
+        that never materializes the dense (n,n) matrix (was ~13.5 GB at genome
+        scale). PREFERRED.
+      `S_string` (dense) -> legacy path.
+    `cache_path`: if given, the (idx, module) table is loaded when present and
+    written otherwise -- the communities are method-independent, so the O(n^2)
+    modularity is paid once per (graph, threshold)."""
+    if cache_path is not None and Path(cache_path).exists():
+        import pandas as pd
+        mdf = pd.read_parquet(cache_path)
+        # only annotated genes stored; unannotated default to set() via .get()
+        return {int(i): {int(mid)} for i, mid in zip(mdf["idx"], mdf["module"])}
+
+    import networkx as nx
+    if adj is not None:
+        if n is None:
+            n = (max(adj) + 1) if adj else 0
+        G = nx.Graph()
+        G.add_nodes_from(range(int(n)))
+        for i, nbrs in adj.items():
+            for j, w in nbrs.items():
+                if i < j and w >= thresh:
+                    G.add_edge(i, j, weight=float(w))
+    else:
+        S = np.asarray(S_string, float).copy()
+        np.fill_diagonal(S, 0.0)
+        A = (S >= thresh) * S                  # weighted, thresholded adjacency
+        n = len(S)
+        G = nx.from_numpy_array(A)
+    comms = nx.algorithms.community.greedy_modularity_communities(G, weight="weight")
+    mem = {i: set() for i in range(int(n))}
+    for mid, c in enumerate(comms):
+        if len(c) <= 1:
+            continue                           # singleton -> no module (unannotated)
+        for i in c:
+            mem[i] = {int(mid)}
+    if cache_path is not None:
+        import pandas as pd
+        rows = [dict(idx=i, module=next(iter(s))) for i, s in mem.items() if s]
+        mdf = pd.DataFrame(rows, columns=["idx", "module"])
+        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        mdf.to_parquet(cache_path)
+    return mem
 
 
 def build_corum_S(membership, n):

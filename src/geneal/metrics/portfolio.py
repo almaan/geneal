@@ -61,6 +61,42 @@ def dropout_robustness(sel: Sequence[int], membership: dict,
     return 1.0 - float(np.mean(lost_fracs))
 
 
+def portfolio_risk(picks, S) -> float:
+    """Equal-weight portfolio variance of the selected set under similarity S.
+
+    R = wᵀ S w with w = 1/K over the selected submatrix:
+        R = 1/K + (1/K²) · Σ_{i≠j in picks} S_ij.
+    Markowitz diversification: if each gene carries some adverse-event risk
+    correlated across genes by S, R is the variance of equal-weight portfolio
+    loss. A diverse set (off-diagonals ~0) -> R ≈ 1/K (floor, all-idiosyncratic);
+    a concentrated set (many similar picks) -> high R (up to 1.0 if all S_ij=1).
+    Lower = better hedged. S should have unit diagonal and off-diagonal in [0,1]."""
+    picks = list(picks)
+    K = len(picks)
+    if K == 0:
+        return 0.0
+    Sub = np.asarray(S, dtype=float)[np.ix_(picks, picks)]
+    w = np.full(K, 1.0 / K)
+    return float(w @ Sub @ w)
+
+
+def effective_bets(picks, S) -> float:
+    """Effective number of independent bets in the selected set under S:
+        N_eff = K² / (1ᵀ S 1)  over the selected submatrix.
+    Range [1, K]: K when the picks are mutually dissimilar (S=I, fully
+    diversified), 1 when all mutually identical (S all-ones, one real bet).
+    The interpretable companion to `portfolio_risk` (N_eff = 1 / R when w=1/K)."""
+    picks = list(picks)
+    K = len(picks)
+    if K == 0:
+        return 0.0
+    Sub = np.asarray(S, dtype=float)[np.ix_(picks, picks)]
+    denom = float(Sub.sum())
+    if denom <= 0:
+        return float(K)
+    return float(K * K / denom)
+
+
 def dropout_curve(sel, membership, value, max_drop: int = 5):
     """Worst-case value-of-diversity curve: fraction of portfolio VALUE retained
     when the d most-valuable pathways fail (d = 0..max_drop). A gene's value is

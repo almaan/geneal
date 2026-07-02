@@ -10,7 +10,8 @@ import pytest
 
 from geneal.runner.ablation import (
     run_acquisition, nominate, evaluate, build_string_S, build_embedding_S,
-    build_corum_S, ACQUISITIONS,
+    build_corum_S, sub_embedding_S, sub_corum_S, sub_string_S, string_adjacency,
+    ACQUISITIONS,
 )
 from geneal.metrics.portfolio import dropout_curve
 from geneal.models.surrogate import GPRSurrogate
@@ -108,6 +109,47 @@ def test_diversity_operator_changes_pick():
     assert pathway_concentration(capped, membership) <= pathway_concentration(base, membership)
 
 
+def test_evaluate_risk_S_both_graphs():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="none",
+                   diversity="none", tau=1.0, surr_factory=_factory)
+    n = len(eff)
+    Sc = np.eye(n); Ss = np.eye(n)               # fully diverse -> risk floor, neff=K
+    m = evaluate(sel, eff, tox, membership, X,
+                 risk_S={"corum": Sc, "string": Ss})
+    assert np.isclose(m["risk_corum"], 1 / 6) and np.isclose(m["risk_string"], 1 / 6)
+    assert np.isclose(m["neff_corum"], 6.0) and np.isclose(m["neff_string"], 6.0)
+    # absent risk_S -> no risk columns
+    m0 = evaluate(sel, eff, tox, membership, X)
+    assert "risk_corum" not in m0
+
+
+def test_nominate_quality_default_is_eff():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    base = dict(membership=membership, S=None, K=6, safety="none", diversity="none",
+                tau=1.0, surr_factory=_factory)
+    default = nominate(rev, X, eff, tox, **base)
+    explicit = nominate(rev, X, eff, tox, quality="eff", **base)
+    assert default == explicit
+
+
+def test_nominate_quality_selectivity_is_more_selective():
+    # independent eff/tox dims; predicting selectivity should yield picks with
+    # higher TRUE selectivity (eff - tox) than predicting efficacy alone.
+    X, eff, tox, membership = _toy(n=60, seed=0)
+    rev = run_acquisition("greedy", X, eff, tox, 20, 4, 5, seed=0, surr_factory=_factory)
+    base = dict(membership=membership, S=None, K=8, safety="none", diversity="none",
+                tau=1.0, surr_factory=_factory)
+    sel_eff = nominate(rev, X, eff, tox, quality="eff", **base)
+    sel_sel = nominate(rev, X, eff, tox, quality="sel", **base)
+    assert len(sel_sel) == len(set(sel_sel)) == 8
+    s_eff = float(np.mean(eff[sel_eff] - tox[sel_eff]))
+    s_sel = float(np.mean(eff[sel_sel] - tox[sel_sel]))
+    assert s_sel >= s_eff - 1e-6
+
+
 def test_evaluate_returns_finite_metrics():
     X, eff, tox, membership = _toy()
     rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
@@ -201,3 +243,53 @@ def test_build_string_S_shape_and_diag():
     assert S.shape == (3, 3)
     assert np.allclose(np.diag(S), 1.0)
     assert np.allclose(S, S.T)
+
+
+# --- SUBSET builders must equal the slice of the full matrix (memory-eff path) --
+
+def test_sub_embedding_S_equals_full_slice():
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((30, 8))
+    full = build_embedding_S(X)
+    idx = [3, 17, 0, 29, 8]                       # arbitrary order, must be honored
+    assert np.allclose(sub_embedding_S(X, idx), full[np.ix_(idx, idx)])
+
+
+def test_sub_corum_S_equals_full_slice():
+    membership = {0: {"A", "B"}, 1: {"A"}, 2: {"B"}, 3: set(), 4: {"C"}, 5: {"A", "C"}}
+    full = build_corum_S(membership, 6)
+    idx = [5, 0, 3, 2]
+    assert np.allclose(sub_corum_S(membership, idx), full[np.ix_(idx, idx)])
+
+
+def test_sub_string_S_equals_full_slice():
+    names = ["AAA (1)", "BBB (2)", "CCC (999999999)", "DDD (3)", "EEE (4)"]
+    full = build_string_S(names)
+    adj = string_adjacency(names)
+    idx = [4, 1, 0, 3]
+    assert np.allclose(sub_string_S(adj, idx), full[np.ix_(idx, idx)])
+
+
+def test_nominate_S_builder_matches_full_S():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    S = build_embedding_S(X)
+    builder = lambda idx: sub_embedding_S(X, idx)
+    a = nominate(rev, X, eff, tox, membership, S=S, K=6, safety="none",
+                 diversity="kdpp", tau=1.0, surr_factory=_factory)
+    b = nominate(rev, X, eff, tox, membership, S_builder=builder, K=6, safety="none",
+                 diversity="kdpp", tau=1.0, surr_factory=_factory)
+    assert a == b
+
+
+def test_evaluate_risk_S_callable_matches_matrix():
+    X, eff, tox, membership = _toy()
+    rev = run_acquisition("greedy", X, eff, tox, 8, 3, 4, seed=0, surr_factory=_factory)
+    sel = nominate(rev, X, eff, tox, membership, S=None, K=6, safety="none",
+                   diversity="none", tau=1.0, surr_factory=_factory)
+    Sc = build_embedding_S(X)
+    m_mat = evaluate(sel, eff, tox, membership, X, risk_S={"corum": Sc})
+    m_cb = evaluate(sel, eff, tox, membership, X,
+                    risk_S={"corum": lambda idx: sub_embedding_S(X, idx)})
+    assert np.isclose(m_mat["risk_corum"], m_cb["risk_corum"])
+    assert np.isclose(m_mat["neff_corum"], m_cb["neff_corum"])

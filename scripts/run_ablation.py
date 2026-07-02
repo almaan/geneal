@@ -37,18 +37,23 @@ from geneal.data.selective import (build_selective_dataset, corum_membership,
                                    toxicity_vector, rank_contrast_lines)
 from geneal.runner.ablation import (run_acquisition, nominate, evaluate,
                                     build_string_S, build_embedding_S, build_corum_S,
-                                    _tox_threshold)
+                                    build_string_membership, _tox_threshold,
+                                    string_adjacency, sub_embedding_S, sub_string_S,
+                                    sub_corum_S)
 from geneal.metrics.portfolio import dropout_curve
-from geneal.models.multiobjective import pareto_indices
+from geneal.models.multiobjective import pareto_indices, hypervolume2d
+from geneal.runner.gp_cv import gp_cv_fold_metrics, cv_cache_key
+from geneal.runner.multicontrast import run_line as mc_run_line
 
 
 def _string_spread(sel, S):
     """STRING pairwise-spread metrics for a portfolio: mean & max pairwise STRING
-    similarity among the picks (lower = more mechanistically spread/hedged)."""
+    similarity among the picks (lower = more mechanistically spread/hedged). `S`
+    is a subset builder idx->(m,m) (returns the picks submatrix directly)."""
     sel = list(sel)
     if S is None or len(sel) < 2:
         return dict(string_redundancy=float("nan"), string_max_sim=float("nan"))
-    sub = S[np.ix_(sel, sel)]
+    sub = np.asarray(S(sel), float) if callable(S) else S[np.ix_(sel, sel)]
     iu = np.triu_indices(len(sel), 1)
     pair = sub[iu]
     return dict(string_redundancy=float(pair.mean()), string_max_sim=float(pair.max()))
@@ -138,7 +143,11 @@ DIVERSITY_OPS = [
     ("kdpp_corum",  "kdpp", "corum"),      # k-DPP, external CORUM complex S
 ]   # (embedding-S k-DPP and per-pathway 'cap' are implemented but excluded from B)
 MAX_DROP = 5   # failure-simulation horizon (# pathways dropped)
-TOX_SOURCES = ["contrast", "aggregate"]
+HEADLINE_BASE = "ehvi"       # base whose per-complex pick distribution feeds the barplot
+QUALITIES = ("eff",)         # diversity-operator quality (efficacy; q=selectivity dropped)
+BARPLOT_TOPK = 15            # complexes shown in the diversity barplot (rest -> 'other')
+# toxicity sources are built per-run in main() from the contrast line(s):
+# one 'contrast_*' source per contrast line + 'aggregate'.
 
 
 def _factory(n_iters):
@@ -185,6 +194,25 @@ def main():
     ap.add_argument("--tau-mode", choices=["absolute", "quantile"], default="absolute",
                     help="absolute (biological, default) or quantile (scale-free sweeps)")
     ap.add_argument("--thresh", type=float, default=-0.5, help="strongly-lethal threshold")
+    ap.add_argument("--cv-folds", type=int, default=5,
+                    help="folds for the method-independent GP-fit cross-validation (Section 0)")
+    ap.add_argument("--no-cv", action="store_true", help="skip the GP-fit CV (Section 0)")
+    ap.add_argument("--analyses", choices=["both", "a", "b"], default="both",
+                    help="which analyses to run: 'a' = safety/efficacy (Table 1), "
+                         "'b' = diversity/hedging (Tables 2/A.2), 'both' (default). "
+                         "Use 'b' to regenerate only the hedging tables (e.g. genome-wide) "
+                         "while reusing an existing Analysis-A run.")
+    ap.add_argument("--mc", action="store_true",
+                    help="opt in to the (deprecated/exploratory) multi-contrast EHVI block")
+    ap.add_argument("--mc-n-initial", type=int, default=300,
+                    help="init set size for the multi-contrast joint-GP surrogate")
+    ap.add_argument("--mc-hv-samples", type=int, default=40000,
+                    help="MC samples for the multi-contrast hypervolume eval")
+    ap.add_argument("--cv-cache-dir", default="res/cache",
+                    help="dir for the cached GP-fit CV table (keyed by data+config hash)")
+    ap.add_argument("--string-module-thresh", type=float, default=0.7,
+                    help="STRING combined-score cutoff for discrete STRING modules "
+                         "(greedy-modularity communities; concentration/robustness/distinct on STRING)")
     ap.add_argument("--cap", type=int, default=2, help="per-pathway cap for the cap operator")
     ap.add_argument("--pool", type=int, default=200, help="quality pool the diversity operator selects within")
     ap.add_argument("--ehvi-samples", type=int, default=32)
@@ -192,6 +220,9 @@ def main():
     ap.add_argument("--n-iters", type=int, default=120, help="GP training iterations")
     ap.add_argument("--contrast-line", default=None,
                     help="fixed contrast (normal-tissue stand-in) ModelID; default = top of the ranked candidates")
+    ap.add_argument("--contrast-lines", nargs="+", default=None,
+                    help="MULTIPLE fixed contrast ModelIDs (one toxicity source each, "
+                         "same set for all target lines); overrides --contrast-line")
     ap.add_argument("--contrast-candidates", type=int, default=10,
                     help="how many ranked contrast-line candidates to record in meta")
     ap.add_argument("--cell-lines", type=str, nargs="+", default=None,
@@ -211,6 +242,9 @@ def main():
     except Exception:
         pass
     factory = _factory(args.n_iters)
+    do_a = args.analyses in ("both", "a")
+    do_b = args.analyses in ("both", "b")
+    print(f"analyses: {args.analyses} (A={do_a}, B={do_b})")
     joint_factory = None
     if args.joint_gp:
         from geneal.models.multitask import MultiTaskGPR
@@ -236,16 +270,33 @@ def main():
 
     # ranked contrast-line candidates (most normal-like first)
     contrast_ranked = rank_contrast_lines(ge, args.thresh, n=args.contrast_candidates)
-    contrast_line = args.contrast_line or contrast_ranked[0]
+    # one or more fixed contrast lines (same set for all target lines)
+    if args.contrast_lines:
+        contrast_lines = list(args.contrast_lines)
+    elif args.contrast_line:
+        contrast_lines = [args.contrast_line]
+    else:
+        contrast_lines = [contrast_ranked[0]]
+    contrast_line = contrast_lines[0]   # back-compat primary (meta, single-contrast fallbacks)
+    # toxicity sources: one 'contrast' source per contrast line + the aggregate.
+    # key -> (source_type, contrast_line_or_None)
+    tox_specs = {}
+    multi = len(contrast_lines) > 1
+    for i, c in enumerate(contrast_lines, 1):
+        key = f"contrast_{i}" if multi else "contrast"
+        tox_specs[key] = ("contrast", c)
+    tox_specs["aggregate"] = ("aggregate", None)
+    tox_sources = list(tox_specs.keys())
     print(f"contrast-line candidates (best first): {contrast_ranked}")
-    print(f"using contrast line: {contrast_line}")
+    print(f"using contrast lines: {contrast_lines}  -> tox sources {tox_sources}")
 
-    # target lines: lowest-NaN, EXCLUDING the contrast line (no self-toxicity)
+    # target lines: lowest-NaN, EXCLUDING all contrast lines (no self-toxicity)
+    _cset = set(contrast_lines)
     if args.cell_lines:
-        lines = [c for c in args.cell_lines if c != contrast_line]
+        lines = [c for c in args.cell_lines if c not in _cset]
     else:
         ranked = ge.loc[labs].isna().sum(axis=0).sort_values().index.tolist()
-        lines = [c for c in ranked if c != contrast_line][:args.n_cell_lines]
+        lines = [c for c in ranked if c not in _cset][:args.n_cell_lines]
     print(f"target lines ({len(lines)}): {lines}")
 
     common = dict(n_init=args.n_initial, n_rounds=args.n_rounds, batch=args.batch,
@@ -270,29 +321,62 @@ def main():
         X = StandardScaler().fit_transform(ds.embeddings)
         eff = np.asarray(ds.target, float)
         mem = corum_membership(ds.gene_names)
-        tox = {src: toxicity_vector(ge, ds.gene_names, src, target_line=cl,
-                                    contrast_line=contrast_line, thresh=args.thresh)
-               for src in TOX_SOURCES}
+        tox = {key: toxicity_vector(ge, ds.gene_names, stype, target_line=cl,
+                                    contrast_line=cline, thresh=args.thresh)
+               for key, (stype, cline) in tox_specs.items()}
         return X, eff, mem, tox, ds.gene_names
 
     B_ACQ = sorted({acq for _, acq, _ in B_BASES})   # acquisitions Analysis B needs
-    rows, scatters, assayed_rows, round_rows = [], [], [], []
+    rows, scatters, assayed_rows, round_rows, bar_rows = [], [], [], [], []
+    cv_rows_all = []   # per-line GP-fit CV on target-line LETHALITY (method-independent)
+    mc_rows = []       # multi-contrast joint-GP N-D EHVI nomination (>=2 contrasts)
+    run_mc = bool(args.mc) and len(contrast_lines) >= 2 and do_a
     for cl in lines:
         Xa, effa, mema, toxa_by_src, _ = build_line(emb_a, cl)       # A: full genome
         Xb, effb, memb, toxb_by_src, names_b = build_line(emb_b, cl)  # B: subset
-        # k-DPP similarity sources (N^2 only on the B subset): learned embedding
-        # cosine, external STRING network, external CORUM complexes.
-        S_by_src = {"embedding": build_embedding_S(Xb),
-                    "string": build_string_S(names_b, args.string),
-                    "corum": build_corum_S(memb, len(effb))}
+        # method-independent 5-fold CV of the surrogate predicting THIS line's
+        # lethality from embeddings (cached per line; full-genome pooling across
+        # lines is infeasible for an exact GP, so we CV each line then average).
+        if not args.no_cv and do_a:
+            cvk = cv_cache_key("leth_v3", args.embeddings, args.panel_a, cl,
+                               args.cv_folds, args.thresh)
+            cvc = Path(args.cv_cache_dir) / f"gp_cv_{cl}_{cvk}.parquet"
+            if cvc.exists():
+                cv_rows_all.append(pd.read_parquet(cvc))
+            else:
+                cl_cv = pd.DataFrame([dict(cell_line=cl, axis="lethality", **r)
+                                      for r in gp_cv_fold_metrics(Xa, effa,
+                                          n_splits=args.cv_folds, seed=0)])
+                cvc.parent.mkdir(parents=True, exist_ok=True); cl_cv.to_parquet(cvc)
+                cv_rows_all.append(cl_cv)
+        # k-DPP / risk similarity SOURCES as subset builders idx->(m,m): the k-DPP
+        # only needs the top-pool (~200) submatrix and risk the K (~30) picks, so
+        # we never materialize the full (N,N) matrix (memory-safe at genome scale).
+        # Each builder returns exactly what build_*_S(...)[np.ix_(idx,idx)] would.
+        string_adj = string_adjacency(names_b, args.string)
+        S_build = {"embedding": lambda idx: sub_embedding_S(Xb, idx),
+                   "string": lambda idx: sub_string_S(string_adj, idx),
+                   "corum": lambda idx: sub_corum_S(memb, idx)}
+        # discrete STRING modules for the STRING-side diversity metrics: built from
+        # the sparse adjacency (no dense matrix) and cached per (graph, threshold),
+        # since the modularity partition is method-independent.
+        _mem_cache = (Path(args.cv_cache_dir) /
+                      f"string_mem_{cl}_{cv_cache_key('strmem_v1', args.panel_b, cl, args.string_module_thresh)}.parquet")
+        memb_string = build_string_membership(adj=string_adj, n=len(effb),
+                                              thresh=args.string_module_thresh,
+                                              cache_path=_mem_cache)
         print(f"[{cl}] A={len(effa)} genes, B={len(effb)} genes")
 
         for seed in args.seeds:
+            # multi-contrast joint-GP N-D EHVI nomination (Section A, >=2 contrasts)
+            if run_mc:
+                mc_rows += mc_run_line(ge, emb_a, cl, contrast_lines, args.mc_n_initial,
+                                       args.K, seed, args.mc_hv_samples)
             # ===================== Analysis A (full-genome pool) =====================
-            histA = {k: run_acquisition(k, Xa, effa, None, seed=seed, score=args.acq_score,
-                                        return_history=True, **common)[1]
-                     for k in _TOX_INDEP_ACQ}
-            for src in TOX_SOURCES:
+            histA = ({k: run_acquisition(k, Xa, effa, None, seed=seed, score=args.acq_score,
+                                         return_history=True, **common)[1]
+                      for k in _TOX_INDEP_ACQ} if do_a else {})
+            for src in (tox_sources if do_a else []):
                 toxa = toxa_by_src[src]; ceil_a = _tox_threshold(toxa, args.tau, args.tau_mode)
                 pareto_a = set(int(i) for i in pareto_indices(
                     np.column_stack([effa, -toxa])))   # true genome-wide Pareto front
@@ -309,6 +393,9 @@ def main():
                     assayed_rows.append(dict(tox_source=src, acq=k, cell_line=cl,
                                              seed=seed, n_assayed=len(h[-1]), **m))
                 want_scatter = (seed == args.seeds[0]); picks = {}
+                # global reference for per-round hypervolume in (eff, -tox) space
+                ref_a = np.array([effa.min() - 0.1 * (np.ptp(effa) + 1e-9),
+                                  -(toxa.max()) - 0.1 * (np.ptp(toxa) + 1e-9)])
                 for label, acq_key, safety in ANALYSIS_A:
                     h = histA[acq_key]
                     for r, rev_r in enumerate(h):
@@ -316,13 +403,20 @@ def main():
                         seln = nominate(rev_r, Xa, effa, toxa, mema, safety=safety,
                                         diversity="none", S=None, **nom_common)
                         nq = quick(seln, effa, toxa, ceil_a)
+                        # per-round hypervolume: revealed/assayed front (exploration)
+                        # and the nominated set (decision quality) -> AUC-HV downstream
+                        assayed_hv = float(hypervolume2d(
+                            np.column_stack([effa[rev_r], -toxa[rev_r]]), ref_a))
+                        nom_hv = float(hypervolume2d(
+                            np.column_stack([effa[seln], -toxa[seln]]), ref_a))
                         round_rows.append(dict(
                             tox_source=src, method=label, cell_line=cl, seed=seed, round=r,
                             n_assayed=len(rev_r), assayed_mean_efficacy=a["mean_efficacy"],
                             assayed_mean_toxicity=a["mean_toxicity"], assayed_n_safe=a["n_safe"],
                             nom_mean_efficacy=nq["mean_efficacy"],
                             nom_mean_efficacy_safe=nq["mean_efficacy_safe"],
-                            nom_mean_toxicity=nq["mean_toxicity"], nom_n_safe=nq["n_safe"]))
+                            nom_mean_toxicity=nq["mean_toxicity"], nom_n_safe=nq["n_safe"],
+                            assayed_hypervolume=assayed_hv, nom_hypervolume=nom_hv))
                     sel = nominate(h[-1], Xa, effa, toxa, mema, safety=safety,
                                    diversity="none", S=None, **nom_common)
                     m = evaluate(sel, effa, toxa, mema, tox_ceiling=ceil_a)
@@ -346,10 +440,10 @@ def main():
 
             # ===================== Analysis B (subset pool) =====================
             # tox-independent B acquisitions (run once)
-            histB = {k: run_acquisition(k, Xb, effb, None, seed=seed, score=args.acq_score,
-                                        return_history=True, **common)[1]
-                     for k in B_ACQ if ACQ_SPECS[k][1] == "none" and k != "ehvi"}
-            for src in TOX_SOURCES:
+            histB = ({k: run_acquisition(k, Xb, effb, None, seed=seed, score=args.acq_score,
+                                         return_history=True, **common)[1]
+                      for k in B_ACQ if ACQ_SPECS[k][1] == "none" and k != "ehvi"} if do_b else {})
+            for src in (tox_sources if do_b else []):
                 toxb = toxb_by_src[src]; ceil_b = _tox_threshold(toxb, args.tau, args.tau_mode)
                 pareto_b = set(int(i) for i in pareto_indices(np.column_stack([effb, -toxb])))
                 for k in [a for a in B_ACQ if a not in histB]:    # tox-dependent B acqs
@@ -360,25 +454,49 @@ def main():
                                                joint_factory=joint_factory, acq_safety=acqsaf,
                                                tau=args.tau, tau_mode=args.tau_mode,
                                                return_history=True, **common)[1]
+                # portfolio risk on the hedge's own graph (CORUM) AND a held-out
+                # graph (STRING): does hedging on CORUM generalize to STRING risk?
+                # builders return the (K,K) picks submatrix directly (no dense N^2).
+                risk_S = {"corum": S_build["corum"], "string": S_build["string"]}
                 for base_label, acq_key, safety in B_BASES:
                     for op_label, mode, simsrc in DIVERSITY_OPS:
-                        Sb = S_by_src.get(simsrc) if simsrc else None
+                        Sb = S_build.get(simsrc) if simsrc else None
                         rev_final = histB[acq_key][-1]
-                        sel = nominate(rev_final, Xb, effb, toxb, memb, safety=safety,
-                                       diversity=mode, S=Sb, **nom_common)
-                        m = evaluate(sel, effb, toxb, memb, tox_ceiling=ceil_b)
-                        dc = dropout_curve(sel, memb, effb, MAX_DROP)
-                        p_hit, p_rec, p_recn = _pareto_recall(sel, effb, toxb, pareto_b)
-                        sm = _string_spread(sel, S_by_src["string"])   # STRING pairwise spread
-                        rows.append(dict(analysis="B", tox_source=src,
-                                         method=f"{base_label}+{op_label}", base=base_label,
-                                         operator=op_label, acq=acq_key, safety=safety,
-                                         cell_line=cl, seed=seed,
-                                         n_novel=len(set(sel) - set(rev_final)),
-                                         pareto_hit=p_hit, pareto_recall=p_rec,
-                                         pareto_recall_norm=p_recn, **m, **sm,
-                                         **{f"drop_{i}": dc[i] for i in range(len(dc))}))
-        print(f"[{cl}] done ({len(args.seeds)} seeds x {len(TOX_SOURCES)} tox-sources)")
+                        for quality in QUALITIES:   # q=efficacy only
+                            sel = nominate(rev_final, Xb, effb, toxb, memb, safety=safety,
+                                           diversity=mode, S_builder=Sb, quality=quality,
+                                           **nom_common)
+                            # discrete diversity metrics on CORUM AND STRING modules
+                            m = evaluate(sel, effb, toxb, memb, tox_ceiling=ceil_b,
+                                         risk_S=risk_S, membership_string=memb_string)
+                            dc = dropout_curve(sel, memb, effb, MAX_DROP)
+                            p_hit, p_rec, p_recn = _pareto_recall(sel, effb, toxb, pareto_b)
+                            sm = _string_spread(sel, S_build["string"])  # STRING pairwise spread
+                            rows.append(dict(analysis="B", tox_source=src,
+                                             method=f"{base_label}+{op_label}", base=base_label,
+                                             operator=op_label, quality=quality,
+                                             acq=acq_key, safety=safety,
+                                             cell_line=cl, seed=seed,
+                                             n_novel=len(set(sel) - set(rev_final)),
+                                             pareto_hit=p_hit, pareto_recall=p_rec,
+                                             pareto_recall_norm=p_recn, **m, **sm,
+                                             **{f"drop_{i}": dc[i] for i in range(len(dc))}))
+                            # diversity barplot: SINGLE-complex gene assignment (each
+                            # gene -> its smallest complex id, -1 = unannotated) so
+                            # counts sum to K and a 'rest' bar keeps none vs k-DPP at
+                            # the same total (k-DPP must not look like fewer picks).
+                            if base_label == HEADLINE_BASE and op_label in ("none", "kdpp_corum"):
+                                cnt = {}
+                                for g in sel:
+                                    cs = memb.get(g, set())
+                                    bucket = min(cs) if cs else -1
+                                    cnt[bucket] = cnt.get(bucket, 0) + 1
+                                for c, k in cnt.items():
+                                    bar_rows.append(dict(
+                                        tox_source=src, base=base_label, operator=op_label,
+                                        quality=quality, cell_line=cl, seed=seed,
+                                        complex_id=int(c), count=int(k)))
+        print(f"[{cl}] done ({len(args.seeds)} seeds x {len(tox_sources)} tox-sources)")
 
     # ---- Persist + report ----
     df = pd.DataFrame(rows)
@@ -391,17 +509,25 @@ def main():
         scatter_df.to_parquet(out / "scatter.parquet")
     assayed_df = pd.DataFrame(assayed_rows); assayed_df.to_parquet(out / "assayed.parquet")
     rounds_df = pd.DataFrame(round_rows); rounds_df.to_parquet(out / "rounds.parquet")
+    pd.DataFrame(bar_rows).to_parquet(out / "group_counts.parquet")   # diversity barplot
+    if mc_rows:
+        pd.DataFrame(mc_rows).to_parquet(out / "multicontrast.parquet")   # multi-contrast EHVI
+    # method-independent GP-fit CV (Section 0): per-line lethality CV (collected in
+    # the loop above, cached per line); the report averages over the lines present.
+    cv_df = pd.concat(cv_rows_all, ignore_index=True) if cv_rows_all else pd.DataFrame()
+    cv_df.to_parquet(out / "gp_cv.parquet")
+    print(f"GP-fit CV: {len(cv_rows_all)} line(s) -> gp_cv.parquet")
     meta = dict(panel_a=args.panel_a, panel_b=args.panel_b,
                 n_genes_a=int(len(emb_a)), n_genes_b=int(len(emb_b)),
                 lines=lines, seeds=list(args.seeds),
                 K=args.K, tau=args.tau, cap=args.cap, n_rounds=args.n_rounds,
                 batch=args.batch, kdpp_sim=args.kdpp_sim, acq_score=args.acq_score,
-                tau_mode=args.tau_mode, joint_gp=bool(args.joint_gp),
-                tox_sources=TOX_SOURCES, contrast_line=contrast_line,
-                contrast_ranked=contrast_ranked)
+                tau_mode=args.tau_mode, joint_gp=bool(args.joint_gp), analyses=args.analyses,
+                tox_sources=tox_sources, contrast_line=contrast_line,
+                contrast_lines=contrast_lines, contrast_ranked=contrast_ranked)
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
 
-    for src in TOX_SOURCES:
+    for src in tox_sources:
         d = df[df.tox_source == src]
         print(f"\n=== [{src} toxicity] {len(lines)} lines x {len(args.seeds)} seeds (mean +/- 95% CI) ===")
         print("[A: safety vs efficacy]")
@@ -409,19 +535,27 @@ def main():
             sub = d[(d.analysis == "A") & (d.method == label)]
             e, ec = _mean_ci(sub["mean_efficacy"]); t, tc = _mean_ci(sub["mean_toxicity"])
             print(f"  {label:12s} eff {e:.3f}+/-{ec:.3f}  tox {t:.3f}+/-{tc:.3f}")
-        print("[B: diversity / robustness]")
+        print("[B: diversity / risk  (R=portfolio variance lower=hedged, Neff=independent bets)]")
         for base_label, _, _ in B_BASES:
             for op_label, _, _ in DIVERSITY_OPS:
-                sub = d[(d.analysis == "B") & (d.base == base_label) & (d.operator == op_label)]
-                c, _ = _mean_ci(sub["concentration"]); r, _ = _mean_ci(sub["robustness"])
-                e, _ = _mean_ci(sub["mean_efficacy"])
-                print(f"  {base_label:11s}+{op_label:11s} conc {c:.3f} robust {r:.3f} eff {e:.3f}")
+                for quality in QUALITIES:
+                    sub = d[(d.analysis == "B") & (d.base == base_label) &
+                            (d.operator == op_label) & (d.quality == quality)]
+                    if not len(sub):
+                        continue
+                    c, _ = _mean_ci(sub["concentration"]); e, _ = _mean_ci(sub["mean_efficacy"])
+                    rc, _ = _mean_ci(sub["risk_corum"]); rs, _ = _mean_ci(sub["risk_string"])
+                    nc, _ = _mean_ci(sub["neff_corum"]); ns, _ = _mean_ci(sub["neff_string"])
+                    print(f"  {base_label:11s}+{op_label:11s} q={quality} conc {c:.3f} eff {e:.3f}  "
+                          f"R[corum {rc:.3f} string {rs:.3f}]  Neff[corum {nc:.1f} string {ns:.1f}]")
 
     if not args.no_report:
         try:
             from geneal.report.ablation_report import build_ablation_report
             build_ablation_report(df, out / "report.html", scatter=scatter_df, meta=meta,
                                   assayed=assayed_df, rounds=rounds_df,
+                                  group_counts=pd.DataFrame(bar_rows), cv=cv_df,
+                                  multicontrast=pd.DataFrame(mc_rows) if mc_rows else None,
                                   fig_dir=(out / "figs") if args.export_figs else None)
             print(f"\nreport -> {out / 'report.html'}")
         except Exception as e:

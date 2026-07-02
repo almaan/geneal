@@ -1,8 +1,15 @@
 .plans/
+# data + experiment artifacts (never push — large / regenerable)
 /data/
-res/runs/
+res/
 outputs/
+logs/
 rsc/
+# large artifact file types, wherever they land
+*.parquet
+*.pdf
+*.ipynb_checkpoints/
+# python
 __pycache__/
 *.pyc
 *.egg-info/
