@@ -16,3 +16,5 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+# md files
+CLAUDE.md
