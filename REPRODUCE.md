@@ -42,21 +42,49 @@ micromamba run -n geneal python scripts/embed_pubmedbert.py \
 
 ## 4. Run the analysis (genome-wide, joint multitask GP)
 
-**SLURM (sharded: one job per target line + dependent aggregation):**
-```bash
-# one-time: point the launcher at your cluster + micromamba
-cp slurm_env.template.sh slurm_env.sh    # then edit partition/account/MAMBA_* (gitignored)
+### Cluster configuration (one-time, SLURM only)
 
+No cluster-specific values are hardcoded in the job scripts. Instead the launcher
+reads them from `slurm_env.sh`, which you create once from the committed template:
+
+```bash
+cp slurm_env.template.sh slurm_env.sh    # slurm_env.sh is gitignored (never committed)
+```
+
+Then edit `slurm_env.sh` and set:
+
+| variable | meaning |
+|---|---|
+| `GENEAL_PARTITION` | SLURM partition (`sbatch --partition`) |
+| `GENEAL_ACCOUNT` | SLURM account (`sbatch --account`; leave `""` if your cluster has none) |
+| `GENEAL_SHARD_TIME` / `GENEAL_SHARD_CPUS` / `GENEAL_SHARD_MEM` | per-line array-task walltime / cpus-per-task / mem-per-cpu |
+| `GENEAL_AGG_TIME` / `GENEAL_AGG_CPUS` / `GENEAL_AGG_MEM` | aggregation-job resources |
+| `MAMBA_EXE` | path to the `micromamba` binary |
+| `MAMBA_ROOT_PREFIX` | micromamba root prefix |
+| `GENEAL_ENV` | conda env name (default `geneal`) |
+
+How it works: the launcher `source`s `slurm_env.sh`, passes `--partition/--account/`
+`--time/--cpus-per-task/--mem-per-cpu` to `sbatch`, and forwards `MAMBA_EXE`/
+`MAMBA_ROOT_PREFIX`/`GENEAL_ENV` to the jobs via `--export=ALL`. Point it at a
+different file with `GENEAL_SLURM_ENV=/path/to/env.sh`. If `slurm_env.sh` is missing,
+the launcher exits with an explanatory error.
+
+### Launch (SLURM: one job per target line + dependent aggregation)
+
+```bash
 CONTRASTS=3 CONTRAST_IDS="ACH-002462 ACH-001310 ACH-000133" JOINT=1 SEEDS="0 1" \
   PANEL_A=none PANEL_B=none TAG=mlcb \
   bash scripts/launch_ablation_sweep.sh 12
+# -> 12 array shards + a dependent aggregation job
 # -> res/runs_ablation/sweep_mlcb_<ts>/report.html
 ```
-The launcher sources `slurm_env.sh` (partition, account, walltime/cpu/mem, micromamba
-paths) and passes the scheduler flags to `sbatch` — no cluster-specific values are
-hardcoded in the job scripts. Override the config path with `GENEAL_SLURM_ENV=...`.
+`launch_ablation_sweep.sh` env knobs: `SEEDS` (default `0 1`), `JOINT` (`1`=joint
+multitask GP), `CONTRASTS`/`CONTRAST_IDS`, `PANEL_A`/`PANEL_B` (`none`=full genome),
+`ANALYSES` (`both`/`a`/`b`), `TAG`, `EXPORTFIGS`.
 
-**Single process (no SLURM):**
+### Run without SLURM (single process, portable)
+
+Needs no `slurm_env.sh` — runs anywhere the `geneal` env is installed:
 ```bash
 micromamba run -n geneal python scripts/run_analysis.py \
   --panel-a none --panel-b none --joint-gp \
