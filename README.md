@@ -47,7 +47,6 @@ scripts/               pipeline entrypoints (data prep, run, aggregate, report)
 jobs/                  SLURM job scripts (per-line shard + aggregation)
 tests/                 pytest suite
 slurm_env.template.sh  cluster/micromamba config template (copy -> slurm_env.sh)
-docs/method.tex        method write-up
 README.md              this file
 ```
 
