@@ -26,7 +26,7 @@ JOINT_ARG=""; [ -n "${JOINT:-}" ] && JOINT_ARG="--joint-gp"
 
 LINE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$ROOT/lines.txt")
 echo "shard ${SLURM_ARRAY_TASK_ID}: line=$LINE contrast=$CONTRAST analyses=$ANALYSES node=$(hostname)"
-python -u scripts/run_ablation.py \
+python -u scripts/run_analysis.py \
     --embeddings "$EMB" --panel-a "$PANEL_A" --panel-b "$PANEL_B" $JOINT_ARG --no-report \
     --cell-lines "$LINE" --contrast-lines $CONTRAST --seeds $SEEDS --K "$K" \
     --n-initial "$NINIT" --n-rounds "$ROUNDS" --batch "$BATCH" --tau "$TAU" \

@@ -1,4 +1,4 @@
-# scripts/run_ablation.py
+# scripts/run_analysis.py
 """Default ablation experiment (geneal Plan 7, revision v2).
 
 TWO analyses on real DepMap, full active-learning loop per method, run under TWO

@@ -52,7 +52,7 @@ CONTRASTS=3 CONTRAST_IDS="ACH-002462 ACH-001310 ACH-000133" JOINT=1 SEEDS="0 1" 
 
 **Single process (no SLURM):**
 ```bash
-micromamba run -n geneal python scripts/run_ablation.py \
+micromamba run -n geneal python scripts/run_analysis.py \
   --panel-a none --panel-b none --joint-gp \
   --n-cell-lines 12 --contrast-lines ACH-002462 ACH-001310 ACH-000133 \
   --seeds 0 1 --K 30 --n-initial 40 --n-rounds 8 --batch 10 --tau 0.5
@@ -92,7 +92,7 @@ micromamba run -n geneal python scripts/merge_ab_report.py \
 ```
 scripts/build_graph_caches.py     CORUM + STRING caches
 scripts/embed_pubmedbert.py       PubMedBERT gene embeddings
-scripts/run_ablation.py           the analysis engine (Sections A + B)
+scripts/run_analysis.py           the analysis engine (Sections A + B)
 scripts/aggregate_ablation.py     concatenate shards -> combined report
 scripts/merge_ab_report.py        stitch a separate A run + B run
 scripts/launch_ablation_sweep.sh  SLURM sweep launcher
