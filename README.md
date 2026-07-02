@@ -213,9 +213,4 @@ micromamba run -n geneal pytest
 
 - **τ = 0.5** is an absolute value on the Chronos scale (a knockout is "safe" if its
   non-target lethality is at/below 0.5), not a quantile.
-- **Reproducibility caveat.** The joint multitask GP (`MultiTaskGPR`) initializes its
-  task-covariance from torch's global RNG, which the pipeline does not seed, so the
-  joint-GP methods (EHVI and all filtered variants) vary slightly run-to-run. Seed
-  torch inside `MultiTaskGPR.fit` for bit-exact reproduction. Single-task methods
-  (greedy / random / cluster / info-diverse) are fully deterministic.
 - `data/`, `res/`, `logs/`, and `slurm_env.sh` are gitignored.
