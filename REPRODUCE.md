@@ -44,11 +44,17 @@ micromamba run -n geneal python scripts/embed_pubmedbert.py \
 
 **SLURM (sharded: one job per target line + dependent aggregation):**
 ```bash
+# one-time: point the launcher at your cluster + micromamba
+cp slurm_env.template.sh slurm_env.sh    # then edit partition/account/MAMBA_* (gitignored)
+
 CONTRASTS=3 CONTRAST_IDS="ACH-002462 ACH-001310 ACH-000133" JOINT=1 SEEDS="0 1" \
   PANEL_A=none PANEL_B=none TAG=mlcb \
   bash scripts/launch_ablation_sweep.sh 12
 # -> res/runs_ablation/sweep_mlcb_<ts>/report.html
 ```
+The launcher sources `slurm_env.sh` (partition, account, walltime/cpu/mem, micromamba
+paths) and passes the scheduler flags to `sbatch` — no cluster-specific values are
+hardcoded in the job scripts. Override the config path with `GENEAL_SLURM_ENV=...`.
 
 **Single process (no SLURM):**
 ```bash

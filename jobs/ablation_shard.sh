@@ -1,7 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=geneal_abl_shard
-#SBATCH --partition=braid
-#SBATCH --account=braid
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -13,9 +11,10 @@
 # shard_<id>/ outputs (no report); aggregation builds the combined report.
 # Driven by launch_ablation_sweep.sh (sets ROOT, SEEDS, JOINT, CONTRAST).
 cd "$SLURM_SUBMIT_DIR"; mkdir -p logs
-export MAMBA_EXE=/cv/home/andera29/.local/bin/micromamba
-export MAMBA_ROOT_PREFIX=/cv/scratch/u/andera29/micromamba/
-eval "$($MAMBA_EXE shell hook --shell bash)"; micromamba activate geneal
+# MAMBA_EXE / MAMBA_ROOT_PREFIX / GENEAL_ENV arrive via sbatch --export=ALL
+# (the launcher sourced slurm_env.sh).
+: "${MAMBA_EXE:?MAMBA_EXE not set — source slurm_env.sh before launching}"
+eval "$("$MAMBA_EXE" shell hook --shell bash)"; micromamba activate "${GENEAL_ENV:-geneal}"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8} MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
 
 EMB="${EMB:-data/processed/embeddings/pubmedbert_all.parquet}"

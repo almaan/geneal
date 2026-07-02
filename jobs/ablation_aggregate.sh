@@ -1,7 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=geneal_abl_agg
-#SBATCH --partition=braid
-#SBATCH --account=braid
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -12,9 +10,9 @@
 # Aggregate all shards under $ROOT into one combined result + report.
 # Submitted by launch_ablation_sweep.sh with --dependency=afterok on the array.
 cd "$SLURM_SUBMIT_DIR"; mkdir -p logs
-export MAMBA_EXE=/cv/home/andera29/.local/bin/micromamba
-export MAMBA_ROOT_PREFIX=/cv/scratch/u/andera29/micromamba/
-eval "$($MAMBA_EXE shell hook --shell bash)"; micromamba activate geneal
+# MAMBA_EXE / MAMBA_ROOT_PREFIX / GENEAL_ENV arrive via sbatch --export=ALL.
+: "${MAMBA_EXE:?MAMBA_EXE not set — source slurm_env.sh before launching}"
+eval "$("$MAMBA_EXE" shell hook --shell bash)"; micromamba activate "${GENEAL_ENV:-geneal}"
 echo "aggregating $ROOT"
 python -u scripts/aggregate_ablation.py "$ROOT" ${EXPORTFIGS:+--figs}
 echo "AGG DONE"

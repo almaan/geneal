@@ -4,11 +4,32 @@
 # Wall time ~ a single line (~20-40 min) instead of the sum over lines.
 #
 # Usage:
+#   cp slurm_env.template.sh slurm_env.sh   # fill in cluster + micromamba paths
 #   scripts/launch_ablation_sweep.sh [N_LINES]
 #   JOINT=1 scripts/launch_ablation_sweep.sh 12          # multitask GP
 #   SEEDS="0 1 2" TAG=indep scripts/launch_ablation_sweep.sh 12
 # Env: SEEDS (default "0 1"), JOINT (empty=independent), TAG, EXPORTFIGS.
+# Cluster/conda config comes from slurm_env.sh (see slurm_env.template.sh).
 set -euo pipefail
+
+# --- cluster + conda config (partition/account/resources/micromamba) ---
+ENV_FILE="${GENEAL_SLURM_ENV:-slurm_env.sh}"
+if [ -f "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+else
+    echo "ERROR: $ENV_FILE not found. Copy slurm_env.template.sh to slurm_env.sh and fill it in." >&2
+    exit 1
+fi
+: "${GENEAL_PARTITION:?set GENEAL_PARTITION in $ENV_FILE}"
+: "${MAMBA_EXE:?set MAMBA_EXE in $ENV_FILE}"
+GENEAL_ENV="${GENEAL_ENV:-geneal}"
+# scheduler flags passed on the sbatch command line (keeps #SBATCH lines generic)
+SB=(--partition="$GENEAL_PARTITION")
+[ -n "${GENEAL_ACCOUNT:-}" ] && SB+=(--account="$GENEAL_ACCOUNT")
+# activate the env for the inline python below
+eval "$("$MAMBA_EXE" shell hook --shell bash)"; micromamba activate "$GENEAL_ENV"
+
 N_LINES="${1:-12}"
 SEEDS="${SEEDS:-0 1}"; JOINT="${JOINT:-}"; TAG="${TAG:-${JOINT:+joint}${JOINT:-indep}}"
 PANEL_A="${PANEL_A:-none}"; PANEL_B="${PANEL_B:-data/processed/depmap/panel_5k.txt}"
@@ -22,7 +43,7 @@ NCON="${CONTRASTS:-1}"
 # the auto rank_contrast_lines selection.
 CONTRAST_IDS="${CONTRAST_IDS:-}"
 # 1. Deterministic target lines + contrast line(s) -> ROOT/lines.txt, ROOT/contrast.txt
-micromamba run -n geneal python - "$GE" "$EMB" "$N_LINES" "$ROOT" "$NCON" "$CONTRAST_IDS" <<'PY'
+python - "$GE" "$EMB" "$N_LINES" "$ROOT" "$NCON" "$CONTRAST_IDS" <<'PY'
 import sys
 import pandas as pd
 from geneal.data.depmap import load_gene_effect, parse_entrez
@@ -55,14 +76,19 @@ CONTRASTS="${NCON}" CONTRAST_IDS="${CONTRAST_IDS}" JOINT="${JOINT}" SEEDS="${SEE
 EOF
 chmod +x "$ROOT/launch.sh"
 
-# 2. One array task per line (parallel).
-ARRAY_ID=$(sbatch --parsable --array="0-$((NL-1))" \
+# 2. One array task per line (parallel). Scheduler + resources from slurm_env.sh;
+#    micromamba paths (MAMBA_EXE/MAMBA_ROOT_PREFIX/GENEAL_ENV) ride --export=ALL.
+ARRAY_ID=$(sbatch --parsable "${SB[@]}" \
+    --time="${GENEAL_SHARD_TIME:-04:00:00}" --cpus-per-task="${GENEAL_SHARD_CPUS:-16}" \
+    --mem-per-cpu="${GENEAL_SHARD_MEM:-8G}" --array="0-$((NL-1))" \
     --export=ALL,ROOT="$ROOT",SEEDS="$SEEDS",JOINT="$JOINT",CONTRAST="$CONTRAST",EMB="$EMB",PANEL_A="$PANEL_A",PANEL_B="$PANEL_B",ANALYSES="${ANALYSES:-both}" \
     jobs/ablation_shard.sh)
 echo "shard array job: $ARRAY_ID"
 
 # 3. Aggregation, runs only if all shards succeed.
-AGG_ID=$(sbatch --parsable --dependency="afterok:${ARRAY_ID}" \
+AGG_ID=$(sbatch --parsable "${SB[@]}" \
+    --time="${GENEAL_AGG_TIME:-00:40:00}" --cpus-per-task="${GENEAL_AGG_CPUS:-8}" \
+    --mem-per-cpu="${GENEAL_AGG_MEM:-8G}" --dependency="afterok:${ARRAY_ID}" \
     --export=ALL,ROOT="$ROOT" jobs/ablation_aggregate.sh)
 echo "aggregation job: $AGG_ID (afterok:$ARRAY_ID)"
 echo "report will land at: $ROOT/report.html"

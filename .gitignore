@@ -9,6 +9,8 @@ rsc/
 *.parquet
 *.pdf
 *.ipynb_checkpoints/
+# local cluster config (copy from slurm_env.template.sh)
+slurm_env.sh
 # python
 __pycache__/
 *.pyc
