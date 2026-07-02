@@ -1,4 +1,0 @@
-name: baseline_random
-acquisition: { _target_: geneal.models.acquisition.RandomAcquisition }
-selection:   { _target_: geneal.models.selection.TopQGreedy }
-surrogate:   { _target_: geneal.models.surrogate.GPRSurrogate }

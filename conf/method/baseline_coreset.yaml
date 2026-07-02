@@ -1,4 +1,0 @@
-name: baseline_coreset
-acquisition: { _target_: geneal.models.acquisition.GreedyMean }
-selection:   { _target_: geneal.models.selection.CoreSet }
-surrogate:   { _target_: geneal.models.surrogate.GPRSurrogate }

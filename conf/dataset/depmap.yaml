@@ -1,3 +1,0 @@
-gene_effect_path: data/processed/depmap/gene_effect.parquet
-embedding_path: data/processed/embeddings/esm2_small.parquet
-cell_line: ACH-000001   # overridden on CLI with the chosen line
