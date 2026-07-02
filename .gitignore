@@ -5,6 +5,7 @@ res/
 outputs/
 logs/
 rsc/
+docs/
 # large artifact file types, wherever they land
 *.parquet
 *.pdf
